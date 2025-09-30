@@ -1737,64 +1737,6 @@ def display_cash_flow_table(flow_analysis):
             use_container_width=True,
             hide_index=True
         )
-        
-        # Key metrics according to manual
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric(
-                "Ingresos Totales",
-                f"${safe_float(ingresos.get('total', 0)):,.0f}",
-                delta="Base 100%"
-            )
-        
-        with col2:
-            total_egresos = safe_float(resumen.get('total_egresos', 0))
-            total_ingresos = safe_float(ingresos.get('total', 0))
-            pct_egresos = (total_egresos/total_ingresos*100) if total_ingresos > 0 else 0
-            st.metric(
-                "Total Egresos", 
-                f"${total_egresos:,.0f}",
-                delta=f"{pct_egresos:.0f}% de ingresos"
-            )
-        
-        with col3:
-            resultado_neto = safe_float(resumen.get('resultado_neto', 0))
-            pct_resultado = safe_float(porcentajes.get('resultado_neto', 0))
-            st.metric(
-                "FCN (Resultado Neto)",
-                f"${resultado_neto:,.0f}",
-                delta=f"{pct_resultado:.1f}% de ingresos"
-            )
-        
-        with col4:
-            # Health indicators according to manual (Section 7.1.1)
-            if pct_resultado >= 20:
-                capacidad_ahorro = "Excelente"
-                color = "#059669"
-            elif pct_resultado >= 10:
-                capacidad_ahorro = "Buena"
-                color = "#F59E0B"
-            elif pct_resultado >= 0:
-                capacidad_ahorro = "Regular"
-                color = "#D97706"
-            else:
-                capacidad_ahorro = "Crítica"
-                color = "#DC2626"
-                
-            st.markdown(f"""
-            <div style="text-align: center;">
-                <div style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: #6B7280; margin-bottom: 0.5rem;">
-                    Tasa de Ahorro (TA)
-                </div>
-                <div style="font-size: 2.5rem; font-weight: 700; color: {color}; margin-bottom: 0.5rem; line-height: 1.1; font-family: 'JetBrains Mono', monospace;">
-                    {pct_resultado:.1f}%
-                </div>
-                <div style="font-size: 0.75rem; color: #6B7280; margin-top: 0.5rem; font-family: 'JetBrains Mono', monospace;">
-                    {capacidad_ahorro}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
             
     except Exception as e:
         st.error(f"Error displaying cash flow table: {str(e)}")
