@@ -2466,19 +2466,6 @@ def generate_pdf_report(flow_analysis, kpis, processed_data):
         st.error(traceback.format_exc())
         return None
     
-# DEBUG FUNCTION - TEMPORAL PARA VERIFICAR COLUMNAS
-def debug_column_names(processed_data):
-    """Function to debug and show exact column names"""
-    if 'inversiones_no_productivas' in processed_data:
-        df = processed_data['inversiones_no_productivas']
-        st.write("**Columnas exactas en Inversiones No Productivas:**")
-        for i, col in enumerate(df.columns):
-            st.write(f"{i+1}. '{col}' (tipo: {type(col).__name__})")
-        
-        # Mostrar primeras filas para entender los datos
-        st.write("**Primeras 3 filas:**")
-        st.dataframe(df.head(3))
-
 # MAIN APPLICATION STATE
 if 'data_initialized' not in st.session_state:
     st.session_state.data_initialized = False
@@ -2645,17 +2632,19 @@ else:
 # MAIN DASHBOARD
 if st.session_state.data_initialized and st.session_state.analysis_results:
     
-    # KPI CARDS - FOLLOWING MANUAL FORMULAS
+# KPI CARDS - FOLLOWING MANUAL FORMULAS
     kpis = st.session_state.analysis_results
-    
+
     st.markdown("""
     <div class="section-container">
         <h2 style="color: #1E3A8A; margin-bottom: 2rem;">Diagnóstico Patrimonial</h2>
     </div>
     """, unsafe_allow_html=True)
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
+
+    # Primera fila: 5 columnas
+    col1, col2, col3, col4, col5 = st.columns(5)
+
+    # COL 1: PATRIMONIO TOTAL COP
     with col1:
         total_patrimony = safe_float(kpis.get('total_patrimony', 0))
         asset_count = int(kpis.get('asset_count', 0))
@@ -2666,8 +2655,62 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
             <div class="kpi-meta">{asset_count} Activos Totales</div>
         </div>
         """, unsafe_allow_html=True)
-    
+
+    # COL 2: PATRIMONIO USD CON INPUT DE TASA DE CAMBIO
     with col2:
+        # Obtener tasa de cambio del session_state o usar default
+        if 'tasa_cambio_usd' not in st.session_state:
+            # Intentar obtener del Excel
+            if 'inversiones_financieras' in st.session_state.processed_data:
+                df_fin = st.session_state.processed_data['inversiones_financieras']
+                tasa_cambio_col = find_exact_column(df_fin, ['Tasa de Cambio', 'Tasa de cambio'])
+                moneda_col = find_exact_column(df_fin, ['Moneda (Lista)'])
+                
+                if tasa_cambio_col and moneda_col:
+                    tasas_usd = df_fin[df_fin[moneda_col].astype(str).str.upper() == 'USD'][tasa_cambio_col]
+                    if len(tasas_usd) > 0:
+                        st.session_state.tasa_cambio_usd = safe_float(tasas_usd.iloc[0])
+                    else:
+                        st.session_state.tasa_cambio_usd = 4200.0
+                else:
+                    st.session_state.tasa_cambio_usd = 4200.0
+            else:
+                st.session_state.tasa_cambio_usd = 4200.0
+        
+        # Card con input integrado
+        st.markdown("""
+        <div class="kpi-card" style="padding: 1.5rem;">
+            <div class="kpi-title">💵 Patrimonio USD</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Input de tasa de cambio dentro de la card
+        tasa_cambio = st.number_input(
+            "Tasa de Cambio (COP/USD)",
+            min_value=1.0,
+            max_value=10000.0,
+            value=st.session_state.tasa_cambio_usd,
+            step=10.0,
+            key="tasa_input",
+            label_visibility="collapsed"
+        )
+        
+        # Actualizar session state
+        st.session_state.tasa_cambio_usd = tasa_cambio
+        
+        # Calcular patrimonio en USD
+        patrimony_usd = total_patrimony / tasa_cambio
+        
+        # Mostrar valor calculado
+        st.markdown(f"""
+        <div style="margin-top: -1rem;">
+            <div class="kpi-value" style="font-size: 2rem; color: #1E3A8A;">${patrimony_usd:,.0f}</div>
+            <div class="kpi-meta">TC: ${tasa_cambio:,.0f} COP/USD</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # COL 3: FLUJO EFECTIVO NETO
+    with col3:
         net_flow = safe_float(kpis.get('net_flow', 0))
         st.markdown(f"""
         <div class="kpi-card">
@@ -2676,8 +2719,9 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
             <div class="kpi-meta">Balance Mensual</div>
         </div>
         """, unsafe_allow_html=True)
-    
-    with col3:
+
+    # COL 4: INGRESOS TOTALES
+    with col4:
         total_income = safe_float(kpis.get('total_income', 0))
         st.markdown(f"""
         <div class="kpi-card">
@@ -2686,8 +2730,9 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
             <div class="kpi-meta">Base de Cálculo</div>
         </div>
         """, unsafe_allow_html=True)
-    
-    with col4:
+
+    # COL 5: TASA DE AHORRO
+    with col5:
         savings_rate = safe_float(kpis.get('savings_rate', 0))
         
         st.markdown(f"""
@@ -2697,6 +2742,7 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
             <div class="kpi-meta">TA = (FCN / Ingresos) × 100</div>
         </div>
         """, unsafe_allow_html=True)
+            
             
     
     # CASH FLOW ANALYSIS
@@ -3139,59 +3185,3 @@ st.markdown(f"""
     </div>
 </div>
 """, unsafe_allow_html=True)
-# 🔍 DEBUGGING DETALLADO - VALORES CALCULADOS
-if st.session_state.data_initialized and flow_analysis:
-    with st.expander("🔍 DEBUG: Ver Cálculos Detallados de FCN", expanded=True):
-        st.markdown("### 💰 INGRESOS")
-        st.json({
-            "Ingreso Salarial": f"${flow_analysis['ingresos']['ingreso_salarial']:,.0f}",
-            "Ingresos Pasivos": f"${flow_analysis['ingresos']['ingresos_pasivos']:,.0f}",
-            "TOTAL INGRESOS": f"${flow_analysis['ingresos']['total']:,.0f}"
-        })
-        
-        st.markdown("### 💸 GASTOS")
-        st.json({
-            "Gastos Esenciales": f"${flow_analysis['gastos']['gastos_esenciales']:,.0f}",
-            "Gastos Operativos": f"${flow_analysis['gastos']['gastos_operativos']:,.0f}",
-            "Gastos Varios": f"${flow_analysis['gastos']['gastos_varios']:,.0f}",
-            "Viajes": f"${flow_analysis['gastos']['viajes']:,.0f}",
-            "Lujo": f"${flow_analysis['gastos']['lujo']:,.0f}",
-            "Mantenimiento Inversiones": f"${flow_analysis['gastos']['mantenimiento_inversiones']:,.0f}",
-            "TOTAL GASTOS": f"${flow_analysis['gastos']['total']:,.0f}"
-        })
-        
-        st.markdown("### 💸 INVERSIONES (INV)")
-        st.json({
-            "Pensión Voluntaria": f"${flow_analysis['inversiones']['pension_voluntaria']:,.0f}",
-            "Proyectos Inmobiliarios": f"${flow_analysis['inversiones']['proyecto_inmobiliarios']:,.0f}",
-            "TOTAL INV": f"${flow_analysis['inversiones']['total']:,.0f}"
-        })
-        
-        st.markdown("### 💸 IMPUESTOS (IMP)")
-        st.json({
-            "Impuestos Inversiones (mensual)": f"${flow_analysis['impuestos']['impuestos_inversiones']:,.0f}",
-            "Provisión Impuestos": f"${flow_analysis['impuestos']['provision_impuestos']:,.0f}",
-            "TOTAL IMP": f"${flow_analysis['impuestos']['total']:,.0f}"
-        })
-        
-        st.markdown("### 📊 RESUMEN FINAL")
-        st.json({
-            "TOTAL INGRESOS": f"${flow_analysis['ingresos']['total']:,.0f}",
-            "TOTAL EGRESOS": f"${flow_analysis['resumen']['total_egresos']:,.0f}",
-            "FCN (Ingresos - Egresos)": f"${flow_analysis['resumen']['resultado_neto']:,.0f}",
-            "Tasa de Ahorro": f"{flow_analysis['resumen']['porcentajes']['resultado_neto']:.2f}%"
-        })
-        
-        # Verificar si Costo mantenimiento se está leyendo
-        if 'inversiones_no_productivas' in st.session_state.processed_data:
-            df_np = st.session_state.processed_data['inversiones_no_productivas']
-            costo_col = find_exact_column(df_np, ['Costo mantenimiento'])
-            st.markdown("### 🔧 VERIFICACIÓN: Costos de Mantenimiento")
-            if costo_col:
-                st.success(f"✅ Columna encontrada: '{costo_col}'")
-                total_costo_mant = df_np[costo_col].sum()
-                st.write(f"**Suma de costos de mantenimiento:** ${total_costo_mant:,.0f}")
-                st.dataframe(df_np[['Nombre del Activo', costo_col]].head(10))
-            else:
-                st.error("❌ No se encuentra la columna 'Costo mantenimiento'")
-
