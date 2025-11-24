@@ -1,4 +1,3 @@
-#This is v9
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -170,6 +169,7 @@ st.markdown("""
         margin: 0;
         text-shadow: 0 2px 4px rgba(0,0,0,0.1);
         letter-spacing: -0.025em;
+        color: var(--white);
     }
     
     .header-subtitle {
@@ -178,6 +178,7 @@ st.markdown("""
         margin: 0.5rem 0 0 0;
         opacity: 0.9;
         letter-spacing: 0.025em;
+        color: var(--white);
     }
     
     .section-container {
@@ -345,6 +346,29 @@ def find_exact_column(df, exact_names):
                 return col
     return None
 
+VALUE_COLUMN_PRIORITY = {
+    'empresas': [
+        'Valor Patrimonial (USD)',
+        'Valor Patrimonial (Moneda Local)',
+        'Valor Patrimonial (COP)'
+    ],
+    'default': [
+        'Valor (USD)',
+        'Valor (Moneda Local)',
+        'Valor (COP)'
+    ],
+    'datos_adicionales': [
+        'Valor',
+        'Valor (COP)'
+    ]
+}
+
+# Para gráficas 6-8, solo usar USD
+VALUE_COLUMN_USD_ONLY = {
+    'empresas': ['Valor Patrimonial (USD)'],
+    'default': ['Valor (USD)']
+}
+
 def validate_dataframe(df, required_columns):
     """Validate that dataframe has required columns"""
     if df is None or df.empty:
@@ -352,8 +376,12 @@ def validate_dataframe(df, required_columns):
     
     missing_cols = []
     for req_col in required_columns:
-        if find_exact_column(df, [req_col]) is None:
-            missing_cols.append(req_col)
+        if isinstance(req_col, (list, tuple)):
+            if find_exact_column(df, list(req_col)) is None:
+                missing_cols.append(req_col[0])
+        else:
+            if find_exact_column(df, [req_col]) is None:
+                missing_cols.append(req_col)
     
     if missing_cols:
         return False, f"Missing columns: {missing_cols}"
@@ -383,27 +411,27 @@ def process_with_pandas(uploaded_file):
         sheets_config = {
             'Empresas': {
                 'key': 'empresas',
-                'valor_col': 'Valor Patrimonial (COP)',
+                'valor_col': VALUE_COLUMN_PRIORITY['empresas'],
                 'nombre_col': 'Nombre'
             },
             'Inversiones No Productivas': {
                 'key': 'inversiones_no_productivas',
-                'valor_col': 'Valor (COP)',
+                'valor_col': VALUE_COLUMN_PRIORITY['default'],
                 'nombre_col': 'Nombre del Activo'
             },
             'Inversiones Productivas': {
                 'key': 'inversiones_productivas',
-                'valor_col': 'Valor (COP)',
-                'nombre_col': 'Nombre del Proyecto'
+                'valor_col': VALUE_COLUMN_PRIORITY['default'],
+                'nombre_col': 'Nombre del Activo'
             },
             'Inversiones Financieras': {
                 'key': 'inversiones_financieras',
-                'valor_col': 'Valor (COP)',
+                'valor_col': VALUE_COLUMN_PRIORITY['default'],
                 'nombre_col': 'Nombre del Activo'
             },
             'Datos adicionales': {
                 'key': 'datos_adicionales',
-                'valor_col': 'Valor (COP)',
+                'valor_col': VALUE_COLUMN_PRIORITY['datos_adicionales'],
                 'categoria_col': 'Categoría',
                 'subcategoria_col': 'Subcategoria ',
                 'tipo_col': 'Tipo de Relación'
@@ -420,12 +448,13 @@ def process_with_pandas(uploaded_file):
                 if not df.empty:
                     df.columns = [str(col).strip() for col in df.columns]
                     
-                    valor_col = find_exact_column(df, [config['valor_col']])
+                    valor_candidates = config['valor_col'] if isinstance(config['valor_col'], list) else [config['valor_col']]
+                    valor_col = find_exact_column(df, valor_candidates)
                     if valor_col:
                         df[valor_col] = pd.to_numeric(df[valor_col], errors='coerce').fillna(0)
                     
                     if config['key'] == 'datos_adicionales':
-                        required_cols = ['Categoría', 'Subcategoria ', 'Valor (COP)', 'Tipo de Relación']
+                        required_cols = ['Categoría', 'Subcategoria ', ['Valor', 'Valor (COP)'], 'Tipo de Relación']
                         is_valid, msg = validate_dataframe(df, required_cols)
                         if not is_valid:
                             st.warning(f"Datos adicionales: {msg}")
@@ -456,56 +485,116 @@ def process_uploaded_template(uploaded_file):
             'Datos adicionales': 'datos_adicionales'
         }
         
+        found_sheets = []
+        missing_sheets = []
+        processing_errors = []
+        
         for sheet_name, data_key in sheets_config.items():
             if sheet_name in wb.sheetnames:
-                ws = wb[sheet_name]
-                
-                headers = []
-                for cell in ws[1]:
-                    if cell.value:
-                        headers.append(str(cell.value).strip())
-                    else:
-                        break
-                
-                data_rows = []
-                for row in ws.iter_rows(min_row=2, values_only=True):
-                    if row[0] and str(row[0]).upper() != 'TOTAL':
+                found_sheets.append(sheet_name)
+                try:
+                    ws = wb[sheet_name]
+                    
+                    headers = []
+                    for cell in ws[1]:
+                        if cell.value:
+                            headers.append(str(cell.value).strip())
+                        else:
+                            break
+                    
+                    if not headers:
+                        processing_errors.append(f"{sheet_name}: No se encontraron encabezados")
+                        continue
+                    
+                    data_rows = []
+                    for row in ws.iter_rows(min_row=2, values_only=True):
+                        if not any(cell not in (None, '') and str(cell).strip() != '' for cell in row):
+                            continue
+                        if row[0] and str(row[0]).strip().upper() == 'TOTAL':
+                            continue
                         row_data = row[:len(headers)]
                         data_rows.append(row_data)
-                
-                if data_rows and headers:
-                    df = pd.DataFrame(data_rows, columns=headers)
-                    df = df.dropna(how='all')
                     
-                    # Convert numeric columns according to exact configuration
-                    numeric_columns = {
-                        'empresas': ['Valor Patrimonial (COP)', 'Porcentaje'],
-                        'inversiones_no_productivas': ['Valor (COP)', 'Total_management_fee', 'Impuestos'],
-                        'inversiones_productivas': ['Valor (COP)', 'Ingreso Mesual'],
-                        'inversiones_financieras': ['Valor (COP)', 'Ingreso mensual '],
-                        'datos_adicionales': ['Valor (COP)']
-                    }
+                    if not data_rows:
+                        processing_errors.append(f"{sheet_name}: No se encontraron filas de datos (solo encabezados)")
+                        continue
                     
-                    if data_key in numeric_columns:
-                        for col_name in numeric_columns[data_key]:
-                            col = find_exact_column(df, [col_name])
-                            if col:
-                                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-                    
-                    processed_data[data_key] = df
+                    if data_rows and headers:
+                        df = pd.DataFrame(data_rows, columns=headers)
+                        df = df.dropna(how='all')
+                        
+                        if df.empty:
+                            processing_errors.append(f"{sheet_name}: DataFrame vacío después de eliminar filas vacías")
+                            continue
+                        
+                        # Convert numeric columns according to exact configuration
+                        numeric_columns = {
+                            'empresas': ['Valor Patrimonial (USD)', 'Valor Patrimonial (Moneda Local)', 'Porcentaje'],
+                            'inversiones_no_productivas': ['Valor (USD)', 'Valor (Moneda Local)', 'Costo mantenimiento', 'Impuestos'],
+                            'inversiones_productivas': ['Valor (USD)', 'Valor (Moneda Local)', 'Rendimiento Mensual', 'Costo mantenimiento', 'Impuestos'],
+                            'inversiones_financieras': [
+                                'Valor (USD)',
+                                'Valor (Moneda Local)',
+                                'Rendimiento Mensual',
+                                'Management Fee Actual (%)',
+                                'Other Costs (%)',
+                                'Total Costs (%)',
+                                'Costo mantenimiento',
+                                'Costo Proaltus (%)',
+                                'Costo Total Proaltus ($)'
+                            ],
+                            'datos_adicionales': ['Valor', 'Valor (COP)']
+                        }
+                        
+                        if data_key in numeric_columns:
+                            for col_name in numeric_columns[data_key]:
+                                col = find_exact_column(df, [col_name])
+                                if col:
+                                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                        
+                        processed_data[data_key] = df
+                except Exception as e:
+                    processing_errors.append(f"{sheet_name}: Error al procesar - {str(e)}")
+            else:
+                missing_sheets.append(sheet_name)
+        
+        # Log found and missing sheets for debugging
+        if missing_sheets:
+            st.warning(f"Hojas no encontradas: {', '.join(missing_sheets)}. Hojas encontradas: {', '.join(found_sheets) if found_sheets else 'Ninguna'}")
+        
+        # Show processing errors if any
+        if processing_errors:
+            with st.expander("Detalles de errores de procesamiento"):
+                for error in processing_errors:
+                    st.error(error)
+        
+        # If no data was processed, return None
+        if not processed_data:
+            if not found_sheets:
+                st.error("No se encontraron hojas en el archivo Excel. Verifica que el archivo tenga las hojas requeridas.")
+            else:
+                error_msg = f"Se encontraron las hojas pero no se pudo procesar ningún dato. Hojas encontradas: {', '.join(found_sheets)}"
+                if processing_errors:
+                    error_msg += f"\n\nErrores detectados:\n" + "\n".join([f"- {e}" for e in processing_errors])
+                st.error(error_msg)
+            return None
         
         return processed_data
         
     except Exception as e:
+        import traceback
         st.error(f"Error processing Excel file: {str(e)}")
+        with st.expander("Detalles del error"):
+            st.code(traceback.format_exc())
         return None
 
 # MEKKO CHART FUNCTIONS
-def create_proper_mekko_chart(categories, values, title, height=400, colors=None):
+def create_proper_mekko_chart(categories, values, title=None, height=400, colors=None):
     """Creates a proper Mekko chart with correct proportional rectangles"""
     total = sum(values)
     if total == 0:
-        st.warning(f"No data to display in {title}")
+        chart_label = title or "el gráfico solicitado"
+        st.warning(f"No data to display in {chart_label}")
         return
     
     if colors is None:
@@ -572,13 +661,7 @@ def create_proper_mekko_chart(categories, values, title, height=400, colors=None
         
         y_current += row_height
     
-    fig.update_layout(
-        title=dict(
-            text=title,
-            font=dict(size=18, color='#1F2937', family="Inter"),
-            x=0.5,
-            xanchor='center'
-        ),
+    layout_kwargs = dict(
         height=height,
         paper_bgcolor='white',
         plot_bgcolor='white',
@@ -598,6 +681,14 @@ def create_proper_mekko_chart(categories, values, title, height=400, colors=None
         margin=dict(l=0, r=0, t=60, b=10),
         showlegend=False
     )
+    if title:
+        layout_kwargs['title'] = dict(
+            text=title,
+            font=dict(size=18, color='#1F2937', family="Inter"),
+            x=0.5,
+            xanchor='center'
+        )
+    fig.update_layout(**layout_kwargs)
     
     st.plotly_chart(fig, use_container_width=True)
 
@@ -612,7 +703,7 @@ def create_expenses_mekko_chart(processed_data):
     
     categoria_col = find_exact_column(df_datos, ['Categoría'])
     subcategoria_col = find_exact_column(df_datos, ['Subcategoria '])
-    valor_col = find_exact_column(df_datos, ['Valor (COP)'])
+    valor_col = find_exact_column(df_datos, VALUE_COLUMN_PRIORITY['datos_adicionales'])
     tipo_col = find_exact_column(df_datos, ['Tipo de Relación'])
     
     if not all([categoria_col, valor_col, tipo_col]):
@@ -656,7 +747,19 @@ def create_expenses_mekko_chart(processed_data):
     categories = [item[0] for item in sorted_expenses]
     values = [item[1] for item in sorted_expenses]
     
-    create_proper_mekko_chart(categories, values, "Distribución de Gastos - Mekko Chart", height=500)
+    palette = ['#1E3A8A', '#3B82F6', '#60A5FA', '#10B981', '#34D399', '#F59E0B', '#FCD34D', '#EF4444', '#F87171', '#8B5CF6', '#A78BFA', '#EC4899']
+    repeated_palette = (palette * ((len(categories) // len(palette)) + 1))[:len(categories)]
+    
+    create_proper_mekko_chart(categories, values, title="Distribución de Gastos", height=500, colors=repeated_palette)
+    
+    total_value = sum(values)
+    if total_value > 0:
+        summary_df = pd.DataFrame({
+            'Categoría': categories,
+            'Valor': [f"${v:,.0f}" for v in values],
+            '% del total': [f"{(v / total_value) * 100:.1f}%" for v in values]
+        })
+        st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
 def create_patrimony_mekko_chart(kpis):
     """Creates Mekko chart for patrimony distribution"""
@@ -677,7 +780,7 @@ def create_patrimony_mekko_chart(kpis):
     
     colors = ['#1E3A8A', '#10B981', '#F59E0B', '#8B5CF6']
     
-    create_proper_mekko_chart(categories, values, "Distribución del Patrimonio - Mekko Chart", height=400, colors=colors)
+    create_proper_mekko_chart(categories, values, title="Distribución por tipo de inversión", height=400, colors=colors)
 
 # CASH FLOW ANALYSIS - CORRECTED ACCORDING TO MANUAL FORMULAS
 def generate_cash_flow_analysis(data):
@@ -694,8 +797,8 @@ def generate_cash_flow_analysis(data):
             df_datos = data['datos_adicionales']
             
             categoria_col = find_exact_column(df_datos, ['Categoría'])
-            subcategoria_col = find_exact_column(df_datos, ['Subcategoria '])
-            valor_col = find_exact_column(df_datos, ['Valor (COP)'])
+            subcategoria_col = find_exact_column(df_datos, ['Subcategoria ', 'Subcategoria'])
+            valor_col = find_exact_column(df_datos, VALUE_COLUMN_PRIORITY['datos_adicionales'])
             tipo_col = find_exact_column(df_datos, ['Tipo de Relación'])
             
             if all([categoria_col, valor_col, tipo_col]):
@@ -707,7 +810,7 @@ def generate_cash_flow_analysis(data):
                     # All income from "Datos adicionales" is considered salary income
                     ingreso_salarial += valor
         
-        # 1.2 Ingresos Pasivos from investments (Equation 8) - ACTUALIZADO v2
+        # 1.2 Ingresos Pasivos from investments (Equation 8)
         # From financial investments
         if 'inversiones_financieras' in data:
             df_fin = data['inversiones_financieras']
@@ -730,62 +833,151 @@ def generate_cash_flow_analysis(data):
         total_ingresos = ingreso_salarial + ingresos_pasivos
         
         # STEP 2: CALCULATE EGRESOS FOLLOWING EQUATION 4
-        # Etotal = GP1 + GP2 + INV + IMP
-        
         # Initialize expense categories
         gesenciales = 0
         goperativos = 0
         gvarios = 0
-        gviajes = 0
-        glujo = 0
         pension_voluntaria = 0
         proyecto_inmobiliarios = 0
         provision_impuestos = 0
+        
+        # Diccionarios para guardar subcategorías individuales
+        subcategorias_esenciales = {}
+        subcategorias_operativos = {}
+        subcategorias_varios = {}  # Incluye viajes y lujo dentro de varios
         
         # 2.1 Calculate expense categories from Datos adicionales
         if 'datos_adicionales' in data:
             df_datos = data['datos_adicionales']
             
             if all([categoria_col, valor_col, tipo_col]):
-                egresos_data = df_datos[df_datos[tipo_col] == 'Egreso']
+                egresos_data = df_datos[df_datos[tipo_col] == 'Egreso'].copy()
                 
+                # Procesar cada egreso
                 for _, row in egresos_data.iterrows():
                     categoria = str(row[categoria_col]).strip()
                     valor = safe_float(row[valor_col])
                     
-                    # Classify according to manual methodology
-                    if categoria == 'Gastos Esenciales':
-                        gesenciales += valor
-                    elif categoria == 'Gastos Operativos':
-                        goperativos += valor
-                    elif categoria == 'Gastos Varios':
-                        gvarios += valor
-                    elif categoria == 'Viajes':
-                        gviajes += valor
-                    elif categoria == 'Lujo':
-                        glujo += valor
-                    elif categoria == 'Inversiones':
-                        # CORREGIDO: Desglosar por subcategoría con mejor lógica
-                        if subcategoria_col and pd.notna(row[subcategoria_col]):
-                            subcategoria = str(row[subcategoria_col]).lower()
-                            if any(keyword in subcategoria for keyword in ['pensión', 'pension', 'voluntaria']):
-                                pension_voluntaria += valor
-                            elif any(keyword in subcategoria for keyword in ['inmobiliario', 'proyecto', 'inmobiliarios']):
-                                proyecto_inmobiliarios += valor
-                        else:
-                            # Si no hay subcategoría específica, asignar a proyectos inmobiliarios por defecto
+                    # Obtener subcategoría
+                    subcategoria = ""
+                    if subcategoria_col and pd.notna(row[subcategoria_col]):
+                        subcategoria = str(row[subcategoria_col]).strip()
+                    
+                    # Usar subcategoría como nombre, o categoría si no hay subcategoría
+                    nombre_item = subcategoria if subcategoria else categoria
+                    
+                    subcategoria_lower = subcategoria.lower()
+                    categoria_lower = categoria.lower()
+                    
+                    # CLASIFICACIÓN: Primero por categoría del Excel, luego por subcategoría
+                    clasificado = False
+                    
+                    # 1. PENSIÓN VOLUNTARIA
+                    pension_keywords = ['pensión voluntaria', 'pension voluntaria', 'aporte pensión', 'aporte pension']
+                    if any(kw in subcategoria_lower for kw in pension_keywords):
+                        pension_voluntaria += valor
+                        clasificado = True
+                    
+                    # 2. PROYECTO INMOBILIARIO
+                    if not clasificado:
+                        inmobiliario_keywords = ['proyecto inmobiliario', 'inmobiliario nuevo', 'inversión inmobiliaria', 'inversion inmobiliaria']
+                        if any(kw in subcategoria_lower for kw in inmobiliario_keywords):
                             proyecto_inmobiliarios += valor
-                    elif categoria == 'Impuestos':
-                        provision_impuestos += valor
+                            clasificado = True
+                    
+                    # 3. CLASIFICACIÓN POR CATEGORÍA DEL EXCEL
+                    # Primero verificar excepciones específicas
+                    personal_domestico_keywords = ['personal doméstico', 'personal domestico', 'personal de servicio', 'empleada', 'empleado doméstico']
+                    es_personal_domestico = any(kw in subcategoria_lower or kw in categoria_lower for kw in personal_domestico_keywords)
+                    
+                    if not clasificado:
+                        if 'esencial' in categoria_lower:
+                            gesenciales += valor
+                            if nombre_item in subcategorias_esenciales:
+                                subcategorias_esenciales[nombre_item] += valor
+                            else:
+                                subcategorias_esenciales[nombre_item] = valor
+                            clasificado = True
+                        elif 'operativo' in categoria_lower:
+                            # Excluir "personal doméstico" de Gastos Operativos
+                            if es_personal_domestico:
+                                # Mover a Gastos Varios
+                                gvarios += valor
+                                if nombre_item in subcategorias_varios:
+                                    subcategorias_varios[nombre_item] += valor
+                                else:
+                                    subcategorias_varios[nombre_item] = valor
+                            else:
+                                goperativos += valor
+                                if nombre_item in subcategorias_operativos:
+                                    subcategorias_operativos[nombre_item] += valor
+                                else:
+                                    subcategorias_operativos[nombre_item] = valor
+                            clasificado = True
+                        elif 'varios' in categoria_lower or 'vario' in categoria_lower:
+                            # Gastos Varios incluye todo lo que esté en esta categoría
+                            gvarios += valor
+                            if nombre_item in subcategorias_varios:
+                                subcategorias_varios[nombre_item] += valor
+                            else:
+                                subcategorias_varios[nombre_item] = valor
+                            clasificado = True
+                        elif 'inversion' in categoria_lower or 'inversión' in categoria_lower:
+                            proyecto_inmobiliarios += valor
+                            clasificado = True
+                        elif 'impuesto' in categoria_lower:
+                            provision_impuestos += valor
+                            clasificado = True
+                    
+                    # 4. Si no se clasificó por categoría, clasificar por subcategoría
+                    # (Viajes, Lujo y Personal Doméstico van a Gastos Varios)
+                    if not clasificado:
+                        # PERSONAL DOMÉSTICO - va a Gastos Varios (no a Operativos)
+                        if es_personal_domestico:
+                            gvarios += valor
+                            if nombre_item in subcategorias_varios:
+                                subcategorias_varios[nombre_item] += valor
+                            else:
+                                subcategorias_varios[nombre_item] = valor
+                            clasificado = True
+                        
+                        # VIAJES - va a Gastos Varios
+                        if not clasificado:
+                            viajes_keywords = ['vacacion', 'viaje', 'hotel', 'vuelo', 'pasaje', 'hospedaje', 'tour']
+                            if any(kw in subcategoria_lower for kw in viajes_keywords):
+                                gvarios += valor
+                                if nombre_item in subcategorias_varios:
+                                    subcategorias_varios[nombre_item] += valor
+                                else:
+                                    subcategorias_varios[nombre_item] = valor
+                                clasificado = True
+                        
+                        # LUJO - va a Gastos Varios
+                        if not clasificado:
+                            lujo_keywords = ['joyería', 'joyeria', 'reloj', 'arte', 'coleccion', 'vino', 'licor', 'premium']
+                            if any(kw in subcategoria_lower for kw in lujo_keywords):
+                                gvarios += valor
+                                if nombre_item in subcategorias_varios:
+                                    subcategorias_varios[nombre_item] += valor
+                                else:
+                                    subcategorias_varios[nombre_item] = valor
+                                clasificado = True
+                        
+                        # Si aún no está clasificado, va a Gastos Varios por defecto
+                        if not clasificado:
+                            gvarios += valor
+                            if nombre_item in subcategorias_varios:
+                                subcategorias_varios[nombre_item] += valor
+                            else:
+                                subcategorias_varios[nombre_item] = valor
         
-       # 2.2 Calculate maintenance costs (Equation 9 and 12) - CORREGIDO v3
+        # 2.2 Calculate maintenance costs
         cmantenimiento_mensual = 0
         impuestos_inversiones_mensual = 0
 
         if 'inversiones_no_productivas' in data:
             df_no_prod = data['inversiones_no_productivas']
             
-            # Usar la columna 'Costo mantenimiento' (valores ANUALES, dividir entre 12)
             costo_mant_col = find_exact_column(df_no_prod, [
                 'Costo mantenimiento',
                 'Costo mantenimiento ',
@@ -795,34 +987,20 @@ def generate_cash_flow_analysis(data):
             if costo_mant_col:
                 for _, row in df_no_prod.iterrows():
                     costo_anual = safe_float(row[costo_mant_col])
-                    # Convertir de anual a mensual
                     costo_mensual = costo_anual / 12
                     cmantenimiento_mensual += costo_mensual
             
-            # Annual taxes converted to monthly (Equation 13)
             tax_col = find_exact_column(df_no_prod, ['Impuestos'])
             if tax_col:
                 impuestos_anuales = safe_float(df_no_prod[tax_col].sum())
                 impuestos_inversiones_mensual = impuestos_anuales / 12
         
-        # STEP 3: CALCULATE EXPENSE CATEGORIES - SIMPLIFICADO
-        # GASTOS = Todos los gastos (esenciales + operativos + varios + viajes + lujo + mantenimiento)
-        total_gastos = gesenciales + goperativos + gvarios + gviajes + glujo + cmantenimiento_mensual
-
-        # INV = Inversiones mensuales (pension + proyectos inmobiliarios)
+        # STEP 3: CALCULATE TOTALS
+        total_gastos = gesenciales + goperativos + gvarios + cmantenimiento_mensual
         total_inversiones = pension_voluntaria + proyecto_inmobiliarios
-
-        # IMP = Impuestos (Equation 13)
         total_impuestos = impuestos_inversiones_mensual + provision_impuestos
-
-        # STEP 4: CALCULATE TOTALS
-        # Etotal = GASTOS + INV + IMP
         total_egresos = total_gastos + total_inversiones + total_impuestos
-        
-        # FCN = Itotal - Etotal (Equation 2)
         resultado_neto = total_ingresos - total_egresos
-        
-        # Build complete analysis structure
         
         # Build complete analysis structure
         flow_analysis = {
@@ -835,11 +1013,14 @@ def generate_cash_flow_analysis(data):
                 'gastos_esenciales': gesenciales,
                 'gastos_operativos': goperativos,
                 'gastos_varios': gvarios,
-                'viajes': gviajes,
-                'lujo': glujo,
                 'mantenimiento_inversiones': cmantenimiento_mensual,
-                'total': total_gastos
-    },
+                'total': total_gastos,
+                'subcategorias': {
+                    'esenciales': subcategorias_esenciales,
+                    'operativos': subcategorias_operativos,
+                    'varios': subcategorias_varios  # Incluye viajes y lujo
+                }
+            },
             'inversiones': {
                 'pension_voluntaria': pension_voluntaria,
                 'proyecto_inmobiliarios': proyecto_inmobiliarios,
@@ -866,6 +1047,8 @@ def generate_cash_flow_analysis(data):
         
     except Exception as e:
         st.error(f"Error in cash flow analysis: {str(e)}")
+        import traceback
+        st.error(traceback.format_exc())
         return None
 
 def calculate_patrimony_kpis(data):
@@ -889,25 +1072,25 @@ def calculate_patrimony_kpis(data):
         # Calculate patrimony by categories using exact names
         if 'empresas' in data:
             df = data['empresas']
-            valor_col = find_exact_column(df, ['Valor Patrimonial (COP)'])
+            valor_col = find_exact_column(df, VALUE_COLUMN_PRIORITY['empresas'])
             if valor_col:
                 kpis['total_companies'] = safe_float(df[valor_col].sum())
         
         if 'inversiones_no_productivas' in data:
             df = data['inversiones_no_productivas']
-            valor_col = find_exact_column(df, ['Valor (COP)'])
+            valor_col = find_exact_column(df, VALUE_COLUMN_PRIORITY['default'])
             if valor_col:
                 kpis['total_non_productive'] = safe_float(df[valor_col].sum())
         
         if 'inversiones_productivas' in data:
             df = data['inversiones_productivas']
-            valor_col = find_exact_column(df, ['Valor (COP)'])
+            valor_col = find_exact_column(df, VALUE_COLUMN_PRIORITY['default'])
             if valor_col:
                 kpis['total_productive'] = safe_float(df[valor_col].sum())
         
         if 'inversiones_financieras' in data:
             df = data['inversiones_financieras']
-            valor_col = find_exact_column(df, ['Valor (COP)'])
+            valor_col = find_exact_column(df, VALUE_COLUMN_PRIORITY['default'])
             if valor_col:
                 kpis['total_financial'] = safe_float(df[valor_col].sum())
         
@@ -951,7 +1134,7 @@ def create_cash_flow_graphic(flow_analysis):
         marker_color='#1E3A8A',
         text=[f"${ingresos['total']:,.0f}"],
         textposition='inside',
-        textfont=dict(color='white', size=16, family="Inter", weight="bold"),
+        textfont=dict(color='white', size=16, family="Inter"),
         name='Ingreso Total',
         width=0.6,
         hovertemplate='<b>%{y}</b><br>Valor: $%{x:,.0f}<extra></extra>'
@@ -965,7 +1148,7 @@ def create_cash_flow_graphic(flow_analysis):
         marker_color='#F3F4F6',
         text=[f"${ingresos['ingreso_salarial']:,.0f}"],
         textposition='inside',
-        textfont=dict(color='#1F2937', size=14, family="Inter", weight="bold"),
+        textfont=dict(color='#1F2937', size=14, family="Inter"),
         name='Ingreso Salarial',
         width=0.4,
         hovertemplate='<b>%{y}</b><br>Valor: $%{x:,.0f}<extra></extra>'
@@ -979,7 +1162,7 @@ def create_cash_flow_graphic(flow_analysis):
         marker_color='#60A5FA',
         text=[f"${ingresos['ingresos_pasivos']:,.0f}"],
         textposition='inside',
-        textfont=dict(color='white', size=14, family="Inter", weight="bold"),
+        textfont=dict(color='white', size=14, family="Inter"),
         name='Ingresos Pasivos',
         width=0.4,
         hovertemplate='<b>%{y}</b><br>Valor: $%{x:,.0f}<extra></extra>'
@@ -1019,6 +1202,7 @@ def create_maintenance_costs_graphic(processed_data):
     df_no_prod = processed_data['inversiones_no_productivas']
     
     name_col = find_exact_column(df_no_prod, ['Nombre del Activo'])
+    moneda_col = find_exact_column(df_no_prod, ['Moneda (Lista)'])
     
     # Usar la nueva columna 'Costo mantenimiento' (ya es mensual)
     costo_mant_col = find_exact_column(df_no_prod, ['Costo mantenimiento'])
@@ -1029,6 +1213,7 @@ def create_maintenance_costs_graphic(processed_data):
 
     nombres = []
     costos_mensuales = []
+    monedas = []
 
     df_valid = df_no_prod.copy()
     df_valid[costo_mant_col] = pd.to_numeric(df_valid[costo_mant_col], errors='coerce').fillna(0)
@@ -1041,10 +1226,36 @@ def create_maintenance_costs_graphic(processed_data):
         if costo_mensual > 0:
             nombres.append(str(row[name_col]))
             costos_mensuales.append(costo_mensual)
+            if moneda_col and pd.notna(row[moneda_col]):
+                monedas.append(str(row[moneda_col]).strip())
+            else:
+                monedas.append('N/A')
         
         if not costos_mensuales:
             st.warning("No valid maintenance cost data")
             return
+    
+    # Crear dataframe con los datos
+    df_display = pd.DataFrame({
+        'Nombre': nombres,
+        'Moneda': monedas,
+        'Valor': costos_mensuales
+    })
+    
+    # Formatear valores para mostrar
+    df_display['Valor Formateado'] = df_display.apply(
+        lambda x: f"${x['Valor']:,.0f} {x['Moneda']}" if x['Moneda'] != 'N/A' else f"${x['Valor']:,.0f}",
+        axis=1
+    )
+    
+    # Mostrar dataframe
+    st.markdown("#### 📊 Detalle de Costos de Mantenimiento Mensual")
+    st.dataframe(
+        df_display[['Nombre', 'Moneda', 'Valor Formateado']].rename(columns={'Valor Formateado': 'Valor'}),
+        use_container_width=True,
+        hide_index=True
+    )
+    st.markdown("---")
     
     max_costo = max(costos_mensuales) if costos_mensuales else 0
     colors = []
@@ -1104,6 +1315,7 @@ def create_taxes_graphic(processed_data):
     
     tax_col = find_exact_column(df_no_prod, ['Impuestos'])
     name_col = find_exact_column(df_no_prod, ['Nombre del Activo'])
+    moneda_col = find_exact_column(df_no_prod, ['Moneda (Lista)'])
     
     if not tax_col or not name_col:
         st.warning(f"Tax columns not found. Available: {list(df_no_prod.columns)}")
@@ -1122,6 +1334,36 @@ def create_taxes_graphic(processed_data):
     # Convert annual taxes to monthly (Equation 13)
     impuestos_mensuales = [i/12 for i in impuestos]
     
+    # Obtener monedas
+    monedas = []
+    for _, row in df_valid.iterrows():
+        if moneda_col and pd.notna(row[moneda_col]):
+            monedas.append(str(row[moneda_col]).strip())
+        else:
+            monedas.append('N/A')
+    
+    # Crear dataframe con los datos
+    df_display = pd.DataFrame({
+        'Nombre': nombres,
+        'Moneda': monedas,
+        'Valor': impuestos_mensuales
+    })
+    
+    # Formatear valores para mostrar
+    df_display['Valor Formateado'] = df_display.apply(
+        lambda x: f"${x['Valor']:,.0f} {x['Moneda']}" if x['Moneda'] != 'N/A' else f"${x['Valor']:,.0f}",
+        axis=1
+    )
+    
+    # Mostrar dataframe
+    st.markdown("#### 📊 Detalle de Impuestos Mensuales")
+    st.dataframe(
+        df_display[['Nombre', 'Moneda', 'Valor Formateado']].rename(columns={'Valor Formateado': 'Valor'}),
+        use_container_width=True,
+        hide_index=True
+    )
+    st.markdown("---")
+    
     colors = ['#1E3A8A', '#3B82F6', '#60A5FA', '#93C5FD', '#DBEAFE', '#F3F4F6'][:len(nombres)]
     
     fig = go.Figure(go.Bar(
@@ -1131,7 +1373,7 @@ def create_taxes_graphic(processed_data):
         marker_color=colors,
         text=[f"${i:,.0f}" if i > 0 else "" for i in impuestos_mensuales],
         textposition='auto',
-        textfont=dict(color='white', size=10, family="Inter", weight="bold"),
+        textfont=dict(color='white', size=10, family="Inter"),
         hovertemplate='<b>%{y}</b><br>Impuesto Mensual: $%{x:,.0f}<extra></extra>'
     ))
     
@@ -1168,9 +1410,13 @@ def create_financial_investments_chart(processed_data):
     df_fin = processed_data['inversiones_financieras']
     
     asset_class_col = find_exact_column(df_fin, ['Asset class'])
-    valor_col = find_exact_column(df_fin, ['Valor (COP)'])
+    valor_col = find_exact_column(df_fin, VALUE_COLUMN_USD_ONLY['default'])
     
-    if not asset_class_col or not valor_col:
+    if not valor_col:
+        st.warning("⚠️ Columna 'Valor (USD)' no encontrada. Esta gráfica requiere valores en USD.")
+        return
+    
+    if not asset_class_col:
         st.warning(f"Required columns not found. Available: {list(df_fin.columns)}")
         return
     
@@ -1237,9 +1483,13 @@ def create_financial_sub_asset_chart(processed_data):
     df_fin = processed_data['inversiones_financieras']
     
     sub_asset_class_col = find_exact_column(df_fin, ['Sub Asset class', 'Sub Asset Class'])
-    valor_col = find_exact_column(df_fin, ['Valor (COP)'])
+    valor_col = find_exact_column(df_fin, VALUE_COLUMN_USD_ONLY['default'])
     
-    if not sub_asset_class_col or not valor_col:
+    if not valor_col:
+        st.warning("⚠️ Columna 'Valor (USD)' no encontrada. Esta gráfica requiere valores en USD.")
+        return
+    
+    if not sub_asset_class_col:
         st.warning(f"Required columns not found. Available: {list(df_fin.columns)}")
         return
     
@@ -1388,8 +1638,104 @@ def create_profitability_breakdown_chart(processed_data):
     
     st.plotly_chart(fig, use_container_width=True)
 
+def create_productive_profitability_breakdown_chart(processed_data):
+    """Create stacked bar chart showing Yield + Appreciation = Rentabilidad for Productive Investments"""
+    if 'inversiones_productivas' not in processed_data:
+        st.warning("No productive investment data")
+        return
+    
+    df_prod = processed_data['inversiones_productivas']
+    
+    nombre_col = find_exact_column(df_prod, ['Nombre del Activo'])
+    yield_col = find_exact_column(df_prod, ['Yield (%)', 'Yield (%) '])
+    appreciation_col = find_exact_column(df_prod, ['Apreciación Anual (%)'])
+    rentabilidad_col = find_exact_column(df_prod, ['Rentabilidad (%)', 'Rentabilidad (%)'])
+    
+    if not all([nombre_col, yield_col, appreciation_col]):
+        st.warning(f"Required columns not found. Available: {list(df_prod.columns)}")
+        return
+    
+    df_valid = df_prod.copy()
+    df_valid[yield_col] = pd.to_numeric(df_valid[yield_col], errors='coerce').fillna(0)
+    df_valid[appreciation_col] = pd.to_numeric(df_valid[appreciation_col], errors='coerce').fillna(0)
+    
+    # Filter only rows with data
+    df_valid = df_valid[(df_valid[yield_col] != 0) | (df_valid[appreciation_col] != 0)]
+    
+    if df_valid.empty:
+        st.warning("No valid profitability data")
+        return
+    
+    nombres = df_valid[nombre_col].tolist()
+    yields = [y * 100 for y in df_valid[yield_col].tolist()]  # Convertir decimal a porcentaje
+    appreciations = [a * 100 for a in df_valid[appreciation_col].tolist()]  # Convertir decimal a porcentaje
+        
+    fig = go.Figure()
+    
+    # Yield bar (bottom stack)
+    fig.add_trace(go.Bar(
+        name='Yield',
+        x=nombres,
+        y=yields,
+        marker_color='#3B82F6',
+        text=[f"{y:.1f}%" if y > 0 else "" for y in yields],
+        textposition='inside',
+        textfont=dict(size=10, color='white', family="Inter"),
+        hovertemplate='<b>%{x}</b><br>Yield: %{y:.2f}%<extra></extra>'
+    ))
+    
+    # Appreciation bar (top stack)
+    fig.add_trace(go.Bar(
+        name='Apreciación',
+        x=nombres,
+        y=appreciations,
+        marker_color='#10B981',
+        text=[f"{a:.1f}%" if a > 0 else "" for a in appreciations],
+        textposition='inside',
+        textfont=dict(size=10, color='white', family="Inter"),
+        hovertemplate='<b>%{x}</b><br>Apreciación: %{y:.2f}%<extra></extra>'
+    ))
+    
+    fig.update_layout(
+        title="Composición de Rentabilidad por Activo Productivo",
+        title_font_size=16,
+        title_font_color='#1F2937',
+        title_font_family="Inter",
+        height=450,
+        paper_bgcolor='white',
+        plot_bgcolor='white',
+        barmode='stack',
+        xaxis=dict(
+            title="Instrumento de Inversión",
+            showgrid=False,
+            tickangle=45,
+            tickfont=dict(size=10, family="Inter"),
+            title_font=dict(size=12, family="Inter")
+        ),
+        yaxis=dict(
+            title="Rentabilidad (%)",
+            showgrid=True,
+            gridcolor='#F3F4F6',
+            ticksuffix='%',
+            tickfont=dict(size=12, family="Inter"),
+            title_font=dict(size=14, family="Inter")
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="center",
+            x=0.5,
+            font=dict(size=12, family="Inter")
+        ),
+        font=dict(family="Inter"),
+        margin=dict(l=80, r=50, t=80, b=150)
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+
 def create_currency_chart(processed_data):
-    """Create currency distribution chart - Agrupar por Moneda (Lista) y sumar Valor (COP)"""
+    """Create currency distribution chart - Agrupar por Moneda (Lista) y sumar valor total"""
     if 'inversiones_financieras' not in processed_data:
         st.warning("No financial investment data")
         return
@@ -1398,28 +1744,28 @@ def create_currency_chart(processed_data):
     
     asset_class_col = find_exact_column(df_fin, ['Asset class'])
     moneda_col = find_exact_column(df_fin, ['Moneda (Lista)'])
-    valor_cop_col = find_exact_column(df_fin, ['Valor (COP)'])
+    valor_col = find_exact_column(df_fin, VALUE_COLUMN_PRIORITY['default'])
     
-    if not all([asset_class_col, moneda_col, valor_cop_col]):
+    if not all([asset_class_col, moneda_col, valor_col]):
         missing_cols = []
         if not asset_class_col: missing_cols.append('Asset class')
         if not moneda_col: missing_cols.append('Moneda (Lista)')
-        if not valor_cop_col: missing_cols.append('Valor (COP)')
+        if not valor_col: missing_cols.append('Valor monetario')
         st.warning(f"Columnas faltantes: {missing_cols}")
         return
     
     df_clean = df_fin.copy()
     df_clean[asset_class_col] = df_clean[asset_class_col].astype(str).str.strip()
     df_clean[moneda_col] = df_clean[moneda_col].astype(str).str.strip().str.upper()
-    df_clean[valor_cop_col] = pd.to_numeric(df_clean[valor_cop_col], errors='coerce').fillna(0)
-    df_clean = df_clean[df_clean[valor_cop_col] > 0]
+    df_clean[valor_col] = pd.to_numeric(df_clean[valor_col], errors='coerce').fillna(0)
+    df_clean = df_clean[df_clean[valor_col] > 0]
     
     if df_clean.empty:
         st.warning("No hay datos válidos para mostrar")
         return
     
-    # Agrupar por Asset Class y Moneda, sumar Valor (COP)
-    grouped = df_clean.groupby([asset_class_col, moneda_col])[valor_cop_col].sum().reset_index()
+    # Agrupar por Asset Class y Moneda, sumar valor
+    grouped = df_clean.groupby([asset_class_col, moneda_col])[valor_col].sum().reset_index()
     
     fig = go.Figure()
     
@@ -1445,7 +1791,7 @@ def create_currency_chart(processed_data):
             tipo_data = moneda_data[moneda_data[asset_class_col] == tipo]
             x_values.append(tipo)
             if len(tipo_data) > 0:
-                y_values.append(tipo_data[valor_cop_col].iloc[0])
+                y_values.append(tipo_data[valor_col].iloc[0])
             else:
                 y_values.append(0)
         
@@ -1457,7 +1803,7 @@ def create_currency_chart(processed_data):
             text=[f"${v:,.0f}" if v > 0 else "" for v in y_values],
             textposition='inside',
             textfont=dict(size=10, color='white', family="Inter"),
-            hovertemplate=f'<b>{moneda}</b><br>%{{x}}<br>Valor: $%{{y:,.0f}} COP<extra></extra>'
+            hovertemplate=f'<b>{moneda}</b><br>%{{x}}<br>Valor: $%{{y:,.0f}}<extra></extra>'
         ))
     
     fig.update_layout(
@@ -1475,7 +1821,7 @@ def create_currency_chart(processed_data):
             title_font=dict(size=14, family="Inter")
         ),
         yaxis=dict(
-            title="Valor (COP)",
+            title="Valor Total",
             tickformat='$,.0f',
             tickfont=dict(size=12, family="Inter"),
             title_font=dict(size=14, family="Inter")
@@ -1496,7 +1842,7 @@ def create_currency_chart(processed_data):
     st.plotly_chart(fig, use_container_width=True)
 
 def create_currency_pie_chart(processed_data):
-    """Create pie chart - Agrupar por Moneda (Lista) y sumar Valor (COP)"""
+    """Create pie chart - Agrupar por Moneda (Lista) y sumar valor total"""
     if 'inversiones_financieras' not in processed_data:
         st.warning("No financial investment data")
         return
@@ -1504,32 +1850,32 @@ def create_currency_pie_chart(processed_data):
     df_fin = processed_data['inversiones_financieras']
     
     moneda_col = find_exact_column(df_fin, ['Moneda (Lista)'])
-    valor_cop_col = find_exact_column(df_fin, ['Valor (COP)'])
+    valor_col = find_exact_column(df_fin, VALUE_COLUMN_PRIORITY['default'])
     
-    if not all([moneda_col, valor_cop_col]):
+    if not all([moneda_col, valor_col]):
         missing_cols = []
         if not moneda_col: missing_cols.append('Moneda (Lista)')
-        if not valor_cop_col: missing_cols.append('Valor (COP)')
+        if not valor_col: missing_cols.append('Valor monetario')
         st.warning(f"Columnas faltantes: {missing_cols}")
         return
     
     df_clean = df_fin.copy()
     df_clean[moneda_col] = df_clean[moneda_col].astype(str).str.strip().str.upper()
-    df_clean[valor_cop_col] = pd.to_numeric(df_clean[valor_cop_col], errors='coerce').fillna(0)
-    df_clean = df_clean[df_clean[valor_cop_col] > 0]
+    df_clean[valor_col] = pd.to_numeric(df_clean[valor_col], errors='coerce').fillna(0)
+    df_clean = df_clean[df_clean[valor_col] > 0]
     
     if df_clean.empty:
         st.warning("No hay datos válidos para mostrar")
         return
     
-    # Agrupar por moneda y sumar Valor (COP)
-    grouped = df_clean.groupby(moneda_col)[valor_cop_col].sum().reset_index()
-    grouped = grouped[grouped[valor_cop_col] > 0].sort_values(valor_cop_col, ascending=False)
+    # Agrupar por moneda y sumar Valor
+    grouped = df_clean.groupby(moneda_col)[valor_col].sum().reset_index()
+    grouped = grouped[grouped[valor_col] > 0].sort_values(valor_col, ascending=False)
     
     # Calcular porcentajes
-    total = grouped[valor_cop_col].sum()
-    grouped['Porcentaje'] = (grouped[valor_cop_col] / total * 100).round(4)
-    grouped['Valor Formateado'] = grouped[valor_cop_col].apply(lambda x: f"${x:,.0f}")
+    total = grouped[valor_col].sum()
+    grouped['Porcentaje'] = (grouped[valor_col] / total * 100).round(4)
+    grouped['Valor Formateado'] = grouped[valor_col].apply(lambda x: f"${x:,.0f}")
     
     colors_monedas = {
         'COP': '#1E3A8A',
@@ -1547,7 +1893,7 @@ def create_currency_pie_chart(processed_data):
     
     with col1:
         fig = px.pie(
-            values=grouped[valor_cop_col],
+            values=grouped[valor_col],
             names=grouped[moneda_col],
             color_discrete_sequence=colors,
             hole=0.0
@@ -1576,7 +1922,7 @@ def create_currency_pie_chart(processed_data):
             textinfo='percent',
             textfont_size=12,
             textfont_family="Inter",
-            hovertemplate='<b>%{label}</b><br>Valor: $%{value:,.0f} COP<br>%{percent}<extra></extra>'
+            hovertemplate='<b>%{label}</b><br>Valor: $%{value:,.0f}<br>%{percent}<extra></extra>'
         )
         
         st.plotly_chart(fig, use_container_width=True)
@@ -1586,7 +1932,218 @@ def create_currency_pie_chart(processed_data):
         
         # Tabla formateada
         display_df = grouped[[moneda_col, 'Valor Formateado', 'Porcentaje']].copy()
-        display_df.columns = ['Moneda', 'Valor (COP)', '%']
+        display_df.columns = ['Moneda', 'Valor', '%']
+        display_df['%'] = display_df['%'].apply(lambda x: f"{x:.4f}%")
+        
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            hide_index=True
+        )
+
+def create_productive_currency_chart(processed_data):
+    """Create currency distribution chart for Productive Investments - Agrupar por Asset class y Moneda"""
+    if 'inversiones_productivas' not in processed_data:
+        st.warning("No productive investment data")
+        return
+    
+    df_prod = processed_data['inversiones_productivas']
+    
+    asset_class_col = find_exact_column(df_prod, ['Asset class'])
+    moneda_col = find_exact_column(df_prod, ['Moneda (Lista)'])
+    valor_col = find_exact_column(df_prod, VALUE_COLUMN_USD_ONLY['default'])
+    
+    if not valor_col:
+        st.warning("⚠️ Columna 'Valor (USD)' no encontrada. Esta gráfica requiere valores en USD.")
+        return
+    
+    if not all([asset_class_col, moneda_col]):
+        missing_cols = []
+        if not asset_class_col: missing_cols.append('Asset class')
+        if not moneda_col: missing_cols.append('Moneda (Lista)')
+        st.warning(f"Columnas faltantes: {missing_cols}")
+        return
+    
+    df_clean = df_prod.copy()
+    df_clean[asset_class_col] = df_clean[asset_class_col].astype(str).str.strip()
+    df_clean[moneda_col] = df_clean[moneda_col].astype(str).str.strip().str.upper()
+    df_clean[valor_col] = pd.to_numeric(df_clean[valor_col], errors='coerce').fillna(0)
+    df_clean = df_clean[df_clean[valor_col] > 0]
+    
+    if df_clean.empty:
+        st.warning("No hay datos válidos para mostrar")
+        return
+    
+    # Agrupar por Asset Class y Moneda, sumar valor
+    grouped = df_clean.groupby([asset_class_col, moneda_col])[valor_col].sum().reset_index()
+    
+    fig = go.Figure()
+    
+    tipos_inversion = grouped[asset_class_col].unique()
+    monedas = grouped[moneda_col].unique()
+    
+    colors_monedas = {
+        'COP': '#1E3A8A',
+        'USD': '#10B981', 
+        'EUR': '#F59E0B',
+        'GBP': '#8B5CF6',
+        'JPY': '#EF4444',
+        'CAD': '#06B6D4'
+    }
+    
+    for moneda in monedas:
+        moneda_data = grouped[grouped[moneda_col] == moneda]
+        
+        x_values = []
+        y_values = []
+        
+        for tipo in tipos_inversion:
+            tipo_data = moneda_data[moneda_data[asset_class_col] == tipo]
+            x_values.append(tipo)
+            if len(tipo_data) > 0:
+                y_values.append(tipo_data[valor_col].iloc[0])
+            else:
+                y_values.append(0)
+        
+        fig.add_trace(go.Bar(
+            name=moneda,
+            x=x_values,
+            y=y_values,
+            marker_color=colors_monedas.get(moneda, '#9CA3AF'),
+            text=[f"${v:,.0f}" if v > 0 else "" for v in y_values],
+            textposition='inside',
+            textfont=dict(size=10, color='white', family="Inter"),
+            hovertemplate=f'<b>{moneda}</b><br>%{{x}}<br>Valor: $%{{y:,.0f}}<extra></extra>'
+        ))
+    
+    fig.update_layout(
+        title="Distribución de Inversiones Productivas por Tipo y Moneda Original",
+        title_font_size=16,
+        title_font_color='#1F2937',
+        title_font_family="Inter",
+        height=450,
+        paper_bgcolor='white',
+        plot_bgcolor='white',
+        barmode='stack',
+        xaxis=dict(
+            title="Tipo de Inversión",
+            tickfont=dict(size=12, family="Inter"),
+            title_font=dict(size=14, family="Inter")
+        ),
+        yaxis=dict(
+            title="Valor Total (USD)",
+            tickformat='$,.0f',
+            tickfont=dict(size=12, family="Inter"),
+            title_font=dict(size=14, family="Inter")
+        ),
+        legend=dict(
+            title="Moneda Original",
+            orientation="v",
+            yanchor="top",
+            y=1,
+            xanchor="left",
+            x=1.02,
+            font=dict(size=12, family="Inter")
+        ),
+        font=dict(family="Inter"),
+        margin=dict(l=80, r=150, t=80, b=80)
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+
+def create_productive_currency_pie_chart(processed_data):
+    """Create pie chart for Productive Investments - Agrupar por Moneda (Lista) y sumar valor total"""
+    if 'inversiones_productivas' not in processed_data:
+        st.warning("No productive investment data")
+        return
+    
+    df_prod = processed_data['inversiones_productivas']
+    
+    moneda_col = find_exact_column(df_prod, ['Moneda (Lista)'])
+    valor_col = find_exact_column(df_prod, VALUE_COLUMN_USD_ONLY['default'])
+    
+    if not valor_col:
+        st.warning("⚠️ Columna 'Valor (USD)' no encontrada. Esta gráfica requiere valores en USD.")
+        return
+    
+    if not moneda_col:
+        st.warning(f"Columna faltante: Moneda (Lista)")
+        return
+    
+    df_clean = df_prod.copy()
+    df_clean[moneda_col] = df_clean[moneda_col].astype(str).str.strip().str.upper()
+    df_clean[valor_col] = pd.to_numeric(df_clean[valor_col], errors='coerce').fillna(0)
+    df_clean = df_clean[df_clean[valor_col] > 0]
+    
+    if df_clean.empty:
+        st.warning("No hay datos válidos para mostrar")
+        return
+    
+    # Agrupar por moneda y sumar Valor
+    grouped = df_clean.groupby(moneda_col)[valor_col].sum().reset_index()
+    grouped = grouped[grouped[valor_col] > 0].sort_values(valor_col, ascending=False)
+    
+    # Calcular porcentajes
+    total = grouped[valor_col].sum()
+    grouped['Porcentaje'] = (grouped[valor_col] / total * 100).round(4)
+    grouped['Valor Formateado'] = grouped[valor_col].apply(lambda x: f"${x:,.0f}")
+    
+    colors_monedas = {
+        'COP': '#1E3A8A',
+        'USD': '#10B981', 
+        'EUR': '#F59E0B',
+        'GBP': '#8B5CF6',
+        'JPY': '#EF4444',
+        'CAD': '#06B6D4'
+    }
+    
+    colors = [colors_monedas.get(moneda, '#9CA3AF') for moneda in grouped[moneda_col]]
+    
+    # Layout en dos columnas
+    col1, col2 = st.columns([1.2, 1])
+    
+    with col1:
+        fig = px.pie(
+            values=grouped[valor_col],
+            names=grouped[moneda_col],
+            color_discrete_sequence=colors,
+            hole=0.0
+        )
+        
+        fig.update_layout(
+            title="Distribución Total por Moneda",
+            title_font_size=16,
+            title_font_color='#1F2937',
+            title_font_family="Inter",
+            height=400,
+            paper_bgcolor='white',
+            font=dict(family="Inter", size=12),
+            margin=dict(l=10, r=10, t=60, b=10),
+            showlegend=True,
+            legend=dict(
+                orientation="v", 
+                x=1.02, 
+                y=0.5,
+                font=dict(size=12, family="Inter")
+            )
+        )
+        
+        fig.update_traces(
+            textposition='inside',
+            textinfo='percent',
+            textfont_size=12,
+            textfont_family="Inter",
+            hovertemplate='<b>%{label}</b><br>Valor: $%{value:,.0f}<br>%{percent}<extra></extra>'
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        st.markdown("#### 📊 Detalle por Moneda")
+        
+        # Tabla formateada
+        display_df = grouped[[moneda_col, 'Valor Formateado', 'Porcentaje']].copy()
+        display_df.columns = ['Moneda', 'Valor', '%']
         display_df['%'] = display_df['%'].apply(lambda x: f"{x:.4f}%")
         
         st.dataframe(
@@ -1637,20 +2194,52 @@ def display_cash_flow_table(flow_analysis):
         data.append(['Gastos', f"${safe_float(gastos.get('total', 0)):,.0f}", f"{safe_float(porcentajes.get('gastos', 0)):.0f}%"])
         row_styles.append('highlight')
 
+        subcategorias = gastos.get('subcategorias', {})
+        
+        # Gastos Esenciales con subcategorías
         data.append(['  Gastos Esenciales', f"${safe_float(gastos.get('gastos_esenciales', 0)):,.0f}", ''])
-        row_styles.append('normal')
+        row_styles.append('bold')
+        
+        esenciales_sub = subcategorias.get('esenciales', {})
+        if esenciales_sub:
+            for nombre, valor in sorted(esenciales_sub.items(), key=lambda x: x[1], reverse=True):
+                data.append([f'    {nombre}', f"${valor:,.0f}", ''])
+                row_styles.append('normal')
+        else:
+            # Si no hay subcategorías, mostrar un item genérico
+            if safe_float(gastos.get('gastos_esenciales', 0)) > 0:
+                data.append(['    Gastos Esenciales', f"${safe_float(gastos.get('gastos_esenciales', 0)):,.0f}", ''])
+                row_styles.append('normal')
 
+        # Gastos Operativos con subcategorías
         data.append(['  Gastos Operativos', f"${safe_float(gastos.get('gastos_operativos', 0)):,.0f}", ''])
-        row_styles.append('normal')
+        row_styles.append('bold')
+        
+        operativos_sub = subcategorias.get('operativos', {})
+        if operativos_sub:
+            for nombre, valor in sorted(operativos_sub.items(), key=lambda x: x[1], reverse=True):
+                data.append([f'    {nombre}', f"${valor:,.0f}", ''])
+                row_styles.append('normal')
+        else:
+            # Si no hay subcategorías, mostrar un item genérico
+            if safe_float(gastos.get('gastos_operativos', 0)) > 0:
+                data.append(['    Gastos Operativos', f"${safe_float(gastos.get('gastos_operativos', 0)):,.0f}", ''])
+                row_styles.append('normal')
 
+        # Gastos Varios con subcategorías (incluye viajes y lujo)
         data.append(['  Gastos Varios', f"${safe_float(gastos.get('gastos_varios', 0)):,.0f}", ''])
-        row_styles.append('normal')
+        row_styles.append('bold')
 
-        data.append(['  Viajes', f"${safe_float(gastos.get('viajes', 0)):,.0f}", ''])
-        row_styles.append('normal')
-
-        data.append(['  Lujo', f"${safe_float(gastos.get('lujo', 0)):,.0f}", ''])
-        row_styles.append('normal')
+        varios_sub = subcategorias.get('varios', {})
+        if varios_sub:
+            for nombre, valor in sorted(varios_sub.items(), key=lambda x: x[1], reverse=True):
+                data.append([f'    {nombre}', f"${valor:,.0f}", ''])
+                row_styles.append('normal')
+        else:
+            # Si no hay subcategorías, mostrar un item genérico
+            if safe_float(gastos.get('gastos_varios', 0)) > 0:
+                data.append(['    Gastos Varios', f"${safe_float(gastos.get('gastos_varios', 0)):,.0f}", ''])
+                row_styles.append('normal')
 
         data.append(['  Mantenimiento Inversiones', f"${safe_float(gastos.get('mantenimiento_inversiones', 0)):,.0f}", ''])
         row_styles.append('normal')
@@ -1677,7 +2266,7 @@ def display_cash_flow_table(flow_analysis):
 
         # Totals
         data.append(['TOTAL EGRESOS (GASTOS+INV+IMP)', f"${safe_float(resumen.get('total_egresos', 0)):,.0f}", ''])
-        row_styles.append('highlight')
+        row_styles.append('normal')
 
         data.append(['Flujo de Efectivo Neto (FCN)', f"${safe_float(resumen.get('resultado_neto', 0)):,.0f}", f"{safe_float(porcentajes.get('resultado_neto', 0)):.0f}%"])
         row_styles.append('highlight')
@@ -1685,14 +2274,9 @@ def display_cash_flow_table(flow_analysis):
         # Create DataFrame
         df = pd.DataFrame(data, columns=['FLUJO REQUERIDO (Mensual)', 'VALOR $', '%'])
         
-        # Apply styling
+        # Apply styling - All text in black, no background colors
         def highlight_rows(row):
-            idx = row.name
-            if idx < len(row_styles):
-                if row_styles[idx] == 'highlight':
-                    return ['background-color: #DBEAFE; font-weight: bold; border-left: 4px solid #1E3A8A;'] * len(row)
-                else:
-                    return [''] * len(row)
+            # Return empty styles - all text will be black by default
             return [''] * len(row)
         
         styled_df = df.style.apply(highlight_rows, axis=1)
@@ -1707,7 +2291,7 @@ def display_cash_flow_table(flow_analysis):
         st.error(f"Error displaying cash flow table: {str(e)}")
 
 def create_return_graphic():
-    """Create expected returns chart - Gráfica 10"""
+    """Create expected returns chart - Gráfica 10 - Enhanced version"""
     categories = [
         'Empresas',
         'Inversiones No productivas\n(Terrenos, Aviones, bienes inmuebles...)',
@@ -1717,40 +2301,75 @@ def create_return_graphic():
     
     # Reference values according to manual
     returns = [3, 2, 8, 7]
-    colors = ['#1E3A8A', '#1E3A8A', '#9CA3AF', '#9CA3AF']
     
-    fig = go.Figure(go.Bar(
+    # Enhanced color palette - more attractive and differentiated
+    colors = [
+        '#1E3A8A',  # Empresas - Dark blue
+        '#3B82F6',  # Inversiones No productivas - Medium blue
+        '#10B981',  # Inversiones Productivas - Green (highest return)
+        '#8B5CF6'   # Inversiones Financieras - Purple
+    ]
+    
+    # Create bar chart with individual colors for each bar
+    fig = go.Figure()
+    
+    fig.add_trace(go.Bar(
         x=categories,
         y=returns,
-        marker_color=colors,
+        marker=dict(
+            color=colors,
+            line=dict(color='white', width=2),
+            opacity=0.9
+        ),
         text=[f"{r}%" for r in returns],
         textposition='outside',
-        textfont=dict(size=16, color='#1F2937', family="Inter", weight="bold"),
-        hovertemplate='<b>%{x}</b><br>Rendimiento: %{y}%<extra></extra>'
+        textfont=dict(size=14, color='#1F2937', family="Inter"),
+        hovertemplate='<b>%{x}</b><br>Rendimiento Esperado: <b>%{y}%</b><extra></extra>'
     ))
     
+    # Find max return for better y-axis range
+    max_return = max(returns)
+    y_max = max(10, max_return * 1.2)
+    
     fig.update_layout(
-        title="Rendimiento Esperado por Categoría de Activos",
-        title_font_size=16,
-        title_font_color='#1F2937',
-        title_font_family="Inter",
-        height=450,
-        paper_bgcolor='white',
+        title=dict(
+            text="Rendimiento Esperado por Categoría de Activos",
+            font=dict(size=18, color='#1F2937', family="Inter"),
+            x=0.5,
+            xanchor='center'
+        ),
+        height=500,
+        paper_bgcolor='#FAFAFA',
         plot_bgcolor='white',
         xaxis=dict(
             showgrid=False, 
             tickangle=45, 
-            tickfont=dict(size=11, color='#1F2937', family="Inter")
+            tickfont=dict(size=12, color='#4B5563', family="Inter"),
+            title=dict(
+                text="Categoría de Activos",
+                font=dict(size=14, color='#1F2937', family="Inter")
+            ),
+            linecolor='#E5E7EB',
+            linewidth=1
         ),
         yaxis=dict(
             showgrid=True, 
-            gridcolor='#F3F4F6',
+            gridcolor='#E5E7EB',
+            gridwidth=1,
             ticksuffix='%',
-            range=[0, 10],
-            tickfont=dict(size=12, family="Inter")
+            range=[0, y_max],
+            tickfont=dict(size=12, color='#4B5563', family="Inter"),
+            title=dict(
+                text="Rendimiento Esperado (%)",
+                font=dict(size=14, color='#1F2937', family="Inter")
+            ),
+            linecolor='#E5E7EB',
+            linewidth=1
         ),
         font=dict(family="Inter"),
-        margin=dict(l=50, r=50, t=80, b=150)
+        margin=dict(l=80, r=50, t=100, b=180),
+        bargap=0.3,
+        hovermode='closest'
     )
     
     st.plotly_chart(fig, use_container_width=True)
@@ -1762,9 +2381,9 @@ def create_geographic_distribution_map(processed_data):
     
     # Collect data from all investment types
     sheets_config = {
-        'inversiones_productivas': {'valor': 'Valor (COP)', 'geo': 'Geografia', 'nombre': 'Nombre del Proyecto'},
-        'inversiones_no_productivas': {'valor': 'Valor (COP)', 'geo': 'Geografia ', 'nombre': 'Nombre del Activo'},
-        'inversiones_financieras': {'valor': 'Valor (COP)', 'geo': 'Geografia', 'nombre': 'Nombre del Activo'}
+        'inversiones_productivas': {'valor_candidates': VALUE_COLUMN_PRIORITY['default'], 'geo': 'Geografia'},
+        'inversiones_no_productivas': {'valor_candidates': VALUE_COLUMN_PRIORITY['default'], 'geo': 'Geografia '},
+        'inversiones_financieras': {'valor_candidates': VALUE_COLUMN_PRIORITY['default'], 'geo': 'Geografia'}
     }
     
     for sheet_key, cols in sheets_config.items():
@@ -1773,7 +2392,8 @@ def create_geographic_distribution_map(processed_data):
             
         df = processed_data[sheet_key]
         
-        valor_col = find_exact_column(df, [cols['valor']])
+        valor_candidates = cols.get('valor_candidates', VALUE_COLUMN_PRIORITY['default'])
+        valor_col = find_exact_column(df, valor_candidates)
         geo_col = find_exact_column(df, [cols['geo'], 'Geografia', 'Geografia ', 'Geography'])
         
         if not valor_col or not geo_col:
@@ -1817,11 +2437,11 @@ def create_geographic_distribution_map(processed_data):
     df_map = pd.DataFrame([
         {
             'Ubicación': loc,
-            'Valor (M COP)': data['valor'] / 1_000_000,
+            'Valor (M USD)': data['valor'] / 1_000_000,
             'Cantidad de Activos': data['cantidad']
         }
         for loc, data in geographic_data.items()
-    ]).sort_values('Valor (M COP)', ascending=False)
+    ]).sort_values('Valor (M USD)', ascending=False)
     
     # Corporate color scale matching dashboard
     custom_colors = ["#DBEAFE", "#93C5FD", "#60A5FA", "#3B82F6", "#1E3A8A"]
@@ -1830,10 +2450,10 @@ def create_geographic_distribution_map(processed_data):
         df_map,
         locations="Ubicación",
         locationmode="country names",
-        color="Valor (M COP)",
+        color="Valor (M USD)",
         hover_name="Ubicación",
         hover_data={
-            'Valor (M COP)': ':,.0f',
+            'Valor (M USD)': ':,.0f',
             'Cantidad de Activos': ':,',
             'Ubicación': False
         },
@@ -1860,7 +2480,7 @@ def create_geographic_distribution_map(processed_data):
             countrycolor="#E5E7EB"
         ),
         coloraxis_colorbar=dict(
-            title=dict(text="Valor (M COP)", font=dict(family="Inter", size=12)),
+            title=dict(text="Valor (M USD)", font=dict(family="Inter", size=12)),
             ticks="outside",
             showticklabels=True,
             tickfont=dict(family="Inter", size=10)
@@ -1876,7 +2496,7 @@ def create_geographic_distribution_map(processed_data):
     # Summary table
     with st.expander("Ver detalle por ubicación"):
         df_display = df_map.copy()
-        df_display['Valor (M COP)'] = df_display['Valor (M COP)'].apply(lambda x: f"${x:,.0f}M")
+        df_display['Valor (M USD)'] = df_display['Valor (M USD)'].apply(lambda x: f"${x:,.0f}M")
         st.dataframe(df_display, use_container_width=True, hide_index=True)
 def create_cost_comparison_chart(processed_data):
     """Create cost comparison chart: Current Management vs Proaltus"""
@@ -1889,7 +2509,7 @@ def create_cost_comparison_chart(processed_data):
     
     # Find columns - NOMBRES CORRECTOS DEL EXCEL
     nombre_col = find_exact_column(df_fin, ['Nombre del Activo'])
-    valor_col = find_exact_column(df_fin, ['Valor (COP)'])
+    valor_col = find_exact_column(df_fin, VALUE_COLUMN_PRIORITY['default'])
     fee_actual_pct_col = find_exact_column(df_fin, [
         'Management Fee Actual (%)',
         'Management Fee Actual(%)',
@@ -1904,7 +2524,7 @@ def create_cost_comparison_chart(processed_data):
     if not all([nombre_col, valor_col, fee_actual_pct_col, fee_proaltus_pct_col]):
         missing = []
         if not nombre_col: missing.append('Nombre del Activo')
-        if not valor_col: missing.append('Valor (COP)')
+        if not valor_col: missing.append('Valor monetario')
         if not fee_actual_pct_col: missing.append('Management Fee Actual (%)')
         if not fee_proaltus_pct_col: missing.append('Costo Proaltus (%)')
         st.warning(f"Required columns not found: {missing}. Available: {list(df_fin.columns)}")
@@ -1946,7 +2566,7 @@ def create_cost_comparison_chart(processed_data):
         marker_color='#DC2626',
         text=[f"${total_actual:,.0f}"],
         textposition='auto',
-        textfont=dict(color='white', size=14, family="Inter", weight="bold"),
+        textfont=dict(color='white', size=14, family="Inter"),
         hovertemplate='<b>Gestor Actual</b><br>Costo: $%{y:,.0f}<extra></extra>'
     ))
     
@@ -1957,7 +2577,7 @@ def create_cost_comparison_chart(processed_data):
         marker_color='#059669',
         text=[f"${total_proaltus:,.0f}"],
         textposition='auto',
-        textfont=dict(color='white', size=14, family="Inter", weight="bold"),
+        textfont=dict(color='white', size=14, family="Inter"),
         hovertemplate='<b>Proaltus</b><br>Costo: $%{y:,.0f}<extra></extra>'
     ))
     
@@ -1975,7 +2595,7 @@ def create_cost_comparison_chart(processed_data):
             tickfont=dict(size=12, family="Inter")
         ),
         yaxis=dict(
-            title="Costo Anual (COP)",
+            title="Costo Anual (USD)",
             showgrid=True,
             gridcolor='#F3F4F6',
             tickformat='$,.0f',
@@ -2132,8 +2752,6 @@ def generate_pdf_report(flow_analysis, kpis, processed_data):
                 ['  Gastos Esenciales', f"${gastos['gastos_esenciales']:,.0f}", ''],
                 ['  Gastos Operativos', f"${gastos['gastos_operativos']:,.0f}", ''],
                 ['  Gastos Varios', f"${gastos['gastos_varios']:,.0f}", ''],
-                ['  Viajes', f"${gastos['viajes']:,.0f}", ''],
-                ['  Lujo', f"${gastos['lujo']:,.0f}", ''],
                 ['  Mantenimiento Inversiones', f"${gastos['mantenimiento_inversiones']:,.0f}", ''],
                 ['', '', ''],
                 ['Inversiones (INV)', f"${inversiones['total']:,.0f}", f"{porcentajes['inversiones']:.0f}%"],
@@ -2149,7 +2767,10 @@ def generate_pdf_report(flow_analysis, kpis, processed_data):
             ]
             
             flow_table = Table(flow_data, colWidths=[3*inch, 1.5*inch, 0.75*inch])
-            flow_table.setStyle(TableStyle([
+            num_rows = len(flow_data)
+            
+            # Build style list dynamically based on actual number of rows
+            table_style = [
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E3A8A')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
                 ('ALIGN', (0, 0), (0, -1), 'LEFT'),
@@ -2158,22 +2779,44 @@ def generate_pdf_report(flow_analysis, kpis, processed_data):
                 ('FONTSIZE', (0, 0), (-1, 0), 10),
                 ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
                 ('FONTSIZE', (0, 1), (-1, -1), 8),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F9FAFB')]),
-                ('BACKGROUND', (0, 1), (-1, 1), colors.HexColor('#DBEAFE')),
-                ('BACKGROUND', (0, 3), (-1, 3), colors.HexColor('#DBEAFE')),  # Gastos
-                ('BACKGROUND', (0, 10), (-1, 10), colors.HexColor('#DBEAFE')),  # Inversiones
-                ('BACKGROUND', (0, 13), (-1, 13), colors.HexColor('#DBEAFE')),  # Impuestos
-                ('BACKGROUND', (0, 16), (-1, -1), colors.HexColor('#DBEAFE')),  # Totales
-                ('BACKGROUND', (0, 15), (-1, 15), colors.HexColor('#DBEAFE')),
-                ('BACKGROUND', (0, 19), (-1, 19), colors.HexColor('#DBEAFE')),
-                ('BACKGROUND', (0, 23), (-1, -1), colors.HexColor('#DBEAFE')),
-                ('FONTNAME', (0, 1), (0, 1), 'Helvetica-Bold'),
-                ('FONTNAME', (0, 5), (0, 5), 'Helvetica-Bold'),
-                ('FONTNAME', (0, 10), (0, 10), 'Helvetica-Bold'),
-                ('FONTNAME', (0, 15), (0, 15), 'Helvetica-Bold'),
-                ('FONTNAME', (0, 19), (0, 19), 'Helvetica-Bold'),
-                ('FONTNAME', (0, 23), (0, -1), 'Helvetica-Bold'),
-            ]))
+            ]
+            
+            # Add row backgrounds only if we have enough rows
+            if num_rows > 1:
+                table_style.append(('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F9FAFB')]))
+            
+            # Add background colors only for rows that exist
+            # Row 1: Ingreso
+            if num_rows > 1:
+                table_style.append(('BACKGROUND', (0, 1), (-1, 1), colors.HexColor('#DBEAFE')))
+                table_style.append(('FONTNAME', (0, 1), (0, 1), 'Helvetica-Bold'))
+            
+            # Row 5: Gastos
+            if num_rows > 5:
+                table_style.append(('BACKGROUND', (0, 5), (-1, 5), colors.HexColor('#DBEAFE')))
+                table_style.append(('FONTNAME', (0, 5), (0, 5), 'Helvetica-Bold'))
+            
+            # Row 11: Inversiones
+            if num_rows > 11:
+                table_style.append(('BACKGROUND', (0, 11), (-1, 11), colors.HexColor('#DBEAFE')))
+                table_style.append(('FONTNAME', (0, 11), (0, 11), 'Helvetica-Bold'))
+            
+            # Row 15: Impuestos
+            if num_rows > 15:
+                table_style.append(('BACKGROUND', (0, 15), (-1, 15), colors.HexColor('#DBEAFE')))
+                table_style.append(('FONTNAME', (0, 15), (0, 15), 'Helvetica-Bold'))
+            
+            # Row 19: TOTAL EGRESOS
+            if num_rows > 19:
+                table_style.append(('BACKGROUND', (0, 19), (-1, 19), colors.HexColor('#DBEAFE')))
+                table_style.append(('FONTNAME', (0, 19), (0, 19), 'Helvetica-Bold'))
+            
+            # Row 20: FCN
+            if num_rows > 20:
+                table_style.append(('BACKGROUND', (0, 20), (-1, 20), colors.HexColor('#DBEAFE')))
+                table_style.append(('FONTNAME', (0, 20), (0, 20), 'Helvetica-Bold'))
+            
+            flow_table.setStyle(TableStyle(table_style))
             
             story.append(flow_table)
             story.append(Spacer(1, 30))
@@ -2275,7 +2918,7 @@ def generate_pdf_report(flow_analysis, kpis, processed_data):
                     yaxis=dict(
                         showgrid=True, 
                         gridcolor='#F3F4F6',
-                        title="Monto (COP)",
+            title="Monto (USD)",
                         tickformat='$,.0f'
                     ),
                     margin=dict(l=80, r=50, t=20, b=80)
@@ -2374,7 +3017,7 @@ def generate_pdf_report(flow_analysis, kpis, processed_data):
                 
                 df_fin = processed_data['inversiones_financieras']
                 asset_class_col = find_exact_column(df_fin, ['Asset class'])
-                valor_col = find_exact_column(df_fin, ['Valor (COP)'])
+                valor_col = find_exact_column(df_fin, VALUE_COLUMN_PRIORITY['default'])
                 
                 if asset_class_col and valor_col:
                     df_clean = df_fin.copy()
@@ -2555,10 +3198,26 @@ if not st.session_state.data_initialized:
         if st.button("Descargar Plantilla Excel", type="primary", key="download_template"):
             try:
                 with st.spinner("Preparando plantilla Excel..."):
-                    try:
-                        with open("Final_Plantilla_proaltus.xlsx", "rb") as template_file:
-                            template_data = template_file.read()
-                        
+                    # Intentar diferentes nombres de archivo posibles
+                    template_files = [
+                        "Final_Plantilla_proaltus.xlsx",
+                        "Plantilla_Proaltus_Test_Data_ultima_version.xlsx",
+                        "Plantilla_Proaltus.xlsx"
+                    ]
+                    
+                    template_data = None
+                    template_found = False
+                    
+                    for template_file in template_files:
+                        try:
+                            with open(template_file, "rb") as f:
+                                template_data = f.read()
+                                template_found = True
+                                break
+                        except FileNotFoundError:
+                            continue
+                    
+                    if template_found and template_data:
                         st.session_state.template_downloaded = True
                         
                         st.download_button(
@@ -2570,12 +3229,14 @@ if not st.session_state.data_initialized:
                         )
                         
                         st.success("Plantilla lista para descarga!")
-                        
-                    except FileNotFoundError:
-                        st.warning("Archivo de plantilla no encontrado.")
+                    else:
+                        st.error("No se encontró el archivo de plantilla. Por favor, asegúrate de que el archivo 'Final_Plantilla_proaltus.xlsx' o 'Plantilla_Proaltus_Test_Data_ultima_version.xlsx' esté en el directorio del proyecto.")
                         
             except Exception as e:
-                st.error(f"Error: {str(e)}")
+                st.error(f"Error al preparar la plantilla: {str(e)}")
+                import traceback
+                with st.expander("Detalles del error"):
+                    st.code(traceback.format_exc())
 
 # UPLOAD SECTION
 st.markdown("""
@@ -2604,7 +3265,7 @@ if not st.session_state.data_initialized:
                 try:
                     processed_data = process_uploaded_template(uploaded_file)
                     
-                    if processed_data:
+                    if processed_data and len(processed_data) > 0:
                         analysis_results = calculate_patrimony_kpis(processed_data)
                         
                         if analysis_results:
@@ -2615,12 +3276,16 @@ if not st.session_state.data_initialized:
                             st.success("Radiografía financiera procesada exitosamente! Cargando dashboard...")
                             st.rerun()
                         else:
-                            st.error("Error calculando métricas financieras")
+                            st.error("Error calculando métricas financieras. Verifica que los datos estén completos.")
                     else:
-                        st.error("Error procesando archivo Excel. Asegúrate de usar la plantilla proporcionada.")
+                        st.error("Error procesando archivo Excel. Asegúrate de usar la plantilla proporcionada y que contenga las hojas requeridas.")
+                        st.info("Hojas requeridas: Empresas, Inversiones No Productivas, Inversiones Productivas, Inversiones Financieras, Datos adicionales")
                         
                 except Exception as e:
+                    import traceback
                     st.error(f"Error de procesamiento: {str(e)}")
+                    with st.expander("Detalles del error"):
+                        st.code(traceback.format_exc())
                     
 else:
     st.markdown("""
@@ -2641,76 +3306,23 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
     </div>
     """, unsafe_allow_html=True)
 
-    # Primera fila: 5 columnas
-    col1, col2, col3, col4, col5 = st.columns(5)
+    # Primera fila: 4 columnas
+    col1, col2, col3, col4 = st.columns(4)
 
-    # COL 1: PATRIMONIO TOTAL COP
+    # COL 1: PATRIMONIO TOTAL (USD)
     with col1:
         total_patrimony = safe_float(kpis.get('total_patrimony', 0))
         asset_count = int(kpis.get('asset_count', 0))
         st.markdown(f"""
         <div class="kpi-card">
-            <div class="kpi-title">Patrimonio Total</div>
+            <div class="kpi-title">Patrimonio Total (USD)</div>
             <div class="kpi-value">${total_patrimony:,.0f}</div>
             <div class="kpi-meta">{asset_count} Activos Totales</div>
         </div>
         """, unsafe_allow_html=True)
 
-    # COL 2: PATRIMONIO USD CON INPUT DE TASA DE CAMBIO
+    # COL 2: FLUJO EFECTIVO NETO
     with col2:
-        # Obtener tasa de cambio del session_state o usar default
-        if 'tasa_cambio_usd' not in st.session_state:
-            # Intentar obtener del Excel
-            if 'inversiones_financieras' in st.session_state.processed_data:
-                df_fin = st.session_state.processed_data['inversiones_financieras']
-                tasa_cambio_col = find_exact_column(df_fin, ['Tasa de Cambio', 'Tasa de cambio'])
-                moneda_col = find_exact_column(df_fin, ['Moneda (Lista)'])
-                
-                if tasa_cambio_col and moneda_col:
-                    tasas_usd = df_fin[df_fin[moneda_col].astype(str).str.upper() == 'USD'][tasa_cambio_col]
-                    if len(tasas_usd) > 0:
-                        st.session_state.tasa_cambio_usd = safe_float(tasas_usd.iloc[0])
-                    else:
-                        st.session_state.tasa_cambio_usd = 4200.0
-                else:
-                    st.session_state.tasa_cambio_usd = 4200.0
-            else:
-                st.session_state.tasa_cambio_usd = 4200.0
-        
-        # Card con input integrado
-        st.markdown("""
-        <div class="kpi-card" style="padding: 1.5rem;">
-            <div class="kpi-title">💵 Patrimonio USD</div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Input de tasa de cambio dentro de la card
-        tasa_cambio = st.number_input(
-            "Tasa de Cambio (COP/USD)",
-            min_value=1.0,
-            max_value=10000.0,
-            value=st.session_state.tasa_cambio_usd,
-            step=10.0,
-            key="tasa_input",
-            label_visibility="collapsed"
-        )
-        
-        # Actualizar session state
-        st.session_state.tasa_cambio_usd = tasa_cambio
-        
-        # Calcular patrimonio en USD
-        patrimony_usd = total_patrimony / tasa_cambio
-        
-        # Mostrar valor calculado
-        st.markdown(f"""
-        <div style="margin-top: -1rem;">
-            <div class="kpi-value" style="font-size: 2rem; color: #1E3A8A;">${patrimony_usd:,.0f}</div>
-            <div class="kpi-meta">TC: ${tasa_cambio:,.0f} COP/USD</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    # COL 3: FLUJO EFECTIVO NETO
-    with col3:
         net_flow = safe_float(kpis.get('net_flow', 0))
         st.markdown(f"""
         <div class="kpi-card">
@@ -2720,8 +3332,8 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
         </div>
         """, unsafe_allow_html=True)
 
-    # COL 4: INGRESOS TOTALES
-    with col4:
+    # COL 3: INGRESOS TOTALES
+    with col3:
         total_income = safe_float(kpis.get('total_income', 0))
         st.markdown(f"""
         <div class="kpi-card">
@@ -2731,8 +3343,8 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
         </div>
         """, unsafe_allow_html=True)
 
-    # COL 5: TASA DE AHORRO
-    with col5:
+    # COL 4: TASA DE AHORRO
+    with col4:
         savings_rate = safe_float(kpis.get('savings_rate', 0))
         
         st.markdown(f"""
@@ -2765,15 +3377,15 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
         # CASH FLOW GRAPHIC - Gráfica 1 from Manual
         st.markdown("""
         <div style="background: #1E3A8A; color: white; padding: 1rem; text-align: center; border-radius: 8px; margin: 2rem 0 1rem 0;">
-            <h2 style="margin: 0; font-size: 1.5rem; font-weight: bold; font-family: Inter;">Gráfica 1: Flujo de Efectivo</h2>
-            <p style="margin: 0.5rem 0 0 0; font-size: 0.875rem; opacity: 0.9;">Estructura Jerárquica de Ingresos</p>
+            <h2 style="margin: 0; font-size: 1.5rem; font-weight: bold; font-family: Inter; color: white;">Flujo de Efectivo</h2>
+            <p style="margin: 0.5rem 0 0 0; font-size: 0.875rem; opacity: 0.9; color: white;">Estructura Jerárquica de Ingresos</p>
         </div>
         """, unsafe_allow_html=True)
         
         create_cash_flow_graphic(flow_analysis)
         
         # EXPENSES MEKKO CHART - Gráfica 2 from Manual  
-        st.markdown("### Gráfica 2: Estructura de Gastos")
+        st.markdown("### Estructura de Gastos")
         create_expenses_mekko_chart(st.session_state.processed_data)
         
         st.markdown("---")
@@ -2792,8 +3404,8 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
         # INVESTMENT CHARTS - Gráficas 6-8 from Manual
         st.markdown("""
         <div style="background: #1E3A8A; color: white; padding: 1rem; text-align: center; border-radius: 8px; margin: 2rem 0 1rem 0;">
-            <h2 style="margin: 0; font-size: 1.5rem; font-weight: bold; font-family: Inter;">Gráficas 6-8: Distribución del Patrimonio</h2>
-            <p style="margin: 0.5rem 0 0 0; font-size: 0.875rem; opacity: 0.9;">Análisis por Categorías de Activos</p>
+            <h2 style="margin: 0; font-size: 1.5rem; font-weight: bold; font-family: Inter; color: white;">Distribución del Patrimonio</h2>
+            <p style="margin: 0.5rem 0 0 0; font-size: 0.875rem; opacity: 0.9; color: white;">Análisis por Categorías de Activos</p>
         </div>
         """, unsafe_allow_html=True)
         
@@ -2806,9 +3418,11 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
                 df_prod = st.session_state.processed_data['inversiones_productivas']
                 
                 name_col = find_exact_column(df_prod, ['Nombre del Activo'])
-                valor_col = find_exact_column(df_prod, ['Valor (COP)'])
+                valor_col = find_exact_column(df_prod, VALUE_COLUMN_USD_ONLY['default'])
                 
-                if name_col and valor_col and not df_prod.empty:
+                if not valor_col:
+                    st.warning("⚠️ Columna 'Valor (USD)' no encontrada. Esta gráfica requiere valores en USD.")
+                elif name_col and valor_col and not df_prod.empty:
                     df_valid = df_prod.copy()
                     df_valid[valor_col] = pd.to_numeric(df_valid[valor_col], errors='coerce').fillna(0)
                     df_valid = df_valid[df_valid[valor_col] > 0]
@@ -2853,10 +3467,8 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
                 else:
                     st.warning("Required columns not found for productive investments")
             
-            st.markdown("#### Inversiones Financieras por Asset Class")
             create_financial_investments_chart(st.session_state.processed_data)
             
-            st.markdown("#### Inversiones Financieras por Sub Asset Class")
             create_financial_sub_asset_chart(st.session_state.processed_data)
         
         with col2:
@@ -2866,9 +3478,11 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
                 df_no_prod = st.session_state.processed_data['inversiones_no_productivas']
                 
                 name_col = find_exact_column(df_no_prod, ['Nombre del Activo'])
-                valor_col = find_exact_column(df_no_prod, ['Valor (COP)'])
+                valor_col = find_exact_column(df_no_prod, VALUE_COLUMN_USD_ONLY['default'])
                 
-                if name_col and valor_col and not df_no_prod.empty:
+                if not valor_col:
+                    st.warning("⚠️ Columna 'Valor (USD)' no encontrada. Esta gráfica requiere valores en USD.")
+                elif name_col and valor_col and not df_no_prod.empty:
                     df_valid = df_no_prod.copy()
                     df_valid[valor_col] = pd.to_numeric(df_valid[valor_col], errors='coerce').fillna(0)
                     df_valid = df_valid[df_valid[valor_col] > 0]
@@ -2913,7 +3527,6 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
                 else:
                     st.warning("Required columns not found for non-productive investments")
             
-            st.markdown("#### Gráfica 9: Distribución del Patrimonio")
             create_patrimony_mekko_chart(kpis)
         
         st.markdown("---")
@@ -2921,8 +3534,8 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
         # CURRENCY DISTRIBUTION CHARTS
         st.markdown("""
         <div style="background: #1E3A8A; color: white; padding: 1rem; text-align: center; border-radius: 8px; margin: 2rem 0 1rem 0;">
-            <h2 style="margin: 0; font-size: 1.5rem; font-weight: bold; font-family: Inter;">Distribución por Moneda</h2>
-            <p style="margin: 0.5rem 0 0 0; font-size: 0.875rem; opacity: 0.9;">Análisis de Diversificación por Tipo de Moneda</p>
+            <h2 style="margin: 0; font-size: 1.5rem; font-weight: bold; font-family: Inter; color: white;">Detalle de Inversiones Financieras</h2>
+            <p style="margin: 0.5rem 0 0 0; font-size: 0.875rem; opacity: 0.9; color: white;">Composición por tipo de activo y moneda de origen</p>
         </div>
         """, unsafe_allow_html=True)
 
@@ -2933,15 +3546,37 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
         # NEW PIE CHART: Total by Currency Only
         st.markdown("### Valor Total por Moneda")
         create_currency_pie_chart(st.session_state.processed_data)
-
-        st.markdown("---")
                 
         # PROFITABILITY BREAKDOWN CHART
         st.markdown("### Desglose de Rentabilidad - Inversiones Financieras")
         create_profitability_breakdown_chart(st.session_state.processed_data)
+
+        st.markdown("---")
+        
+        # PRODUCTIVE INVESTMENTS DETAIL SECTION
+        st.markdown("""
+        <div style="background: #1E3A8A; color: white; padding: 1rem; text-align: center; border-radius: 8px; margin: 2rem 0 1rem 0;">
+            <h2 style="margin: 0; font-size: 1.5rem; font-weight: bold; font-family: Inter; color: white;">Detalle de Inversiones Productivas</h2>
+            <p style="margin: 0.5rem 0 0 0; font-size: 0.875rem; opacity: 0.9; color: white;">Composición por tipo de activo y moneda de origen</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # STACKED BAR: By Asset Type and Currency
+        st.markdown("### Distribución por Tipo de Activo y Moneda")
+        create_productive_currency_chart(st.session_state.processed_data)
+
+        # NEW PIE CHART: Total by Currency Only
+        st.markdown("### Valor Total por Moneda")
+        create_productive_currency_pie_chart(st.session_state.processed_data)
+
+        # PROFITABILITY BREAKDOWN CHART FOR PRODUCTIVE INVESTMENTS
+        st.markdown("### Desglose de Rentabilidad - Inversiones Productivas")
+        create_productive_profitability_breakdown_chart(st.session_state.processed_data)
+
+        st.markdown("---")
         
         # EXPECTED RETURNS CHART - Gráfica 10 from Manual
-        st.markdown("### Gráfica 10: Rendimiento Esperado")
+        st.markdown("### Rendimiento Esperado")
         create_return_graphic()
 
         st.markdown("---")
@@ -2949,8 +3584,8 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
         # GEOGRAPHIC DISTRIBUTION MAP
         st.markdown("""
         <div style="background: #1E3A8A; color: white; padding: 1rem; text-align: center; border-radius: 8px; margin: 2rem 0 1rem 0;">
-            <h2 style="margin: 0; font-size: 1.5rem; font-weight: bold; font-family: Inter;">Mapa de Distribución Geográfica</h2>
-            <p style="margin: 0.5rem 0 0 0; font-size: 0.875rem; opacity: 0.9;">Ubicación y Concentración de Activos</p>
+            <h2 style="margin: 0; font-size: 1.5rem; font-weight: bold; font-family: Inter; color: white;">Mapa de Distribución Geográfica</h2>
+            <p style="margin: 0.5rem 0 0 0; font-size: 0.875rem; opacity: 0.9; color: white;">Ubicación y Concentración de Activos</p>
         </div>
         """, unsafe_allow_html=True)
         
@@ -2961,8 +3596,8 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
         # COST COMPARISON CHART
         st.markdown("""
         <div style="background: #1E3A8A; color: white; padding: 1rem; text-align: center; border-radius: 8px; margin: 2rem 0 1rem 0;">
-            <h2 style="margin: 0; font-size: 1.5rem; font-weight: bold; font-family: Inter;">Análisis de Valor Proaltus</h2>
-            <p style="margin: 0.5rem 0 0 0; font-size: 0.875rem; opacity: 0.9;">Comparación de Costos de Gestión</p>
+            <h2 style="margin: 0; font-size: 1.5rem; font-weight: bold; font-family: Inter; color: white;">Análisis de Valor Proaltus</h2>
+            <p style="margin: 0.5rem 0 0 0; font-size: 0.875rem; opacity: 0.9; color: white;">Comparación de Costos de Gestión</p>
         </div>
         """, unsafe_allow_html=True)
         
@@ -3045,7 +3680,7 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
         if flow_analysis:
             csv_data = pd.DataFrame({
                 'Concepto': ['Ingresos', 'Gastos', 'Inversiones', 'Impuestos', 'Total Egresos', 'FCN'],
-                'Monto_COP': [
+                'Monto': [
                     safe_float(flow_analysis['ingresos']['total']),
                     safe_float(flow_analysis['gastos']['total']),
                     safe_float(flow_analysis['inversiones']['total']),
@@ -3144,7 +3779,7 @@ if st.session_state.data_initialized:
         # Check patrimony
         total_patrimony = safe_float(kpis.get('total_patrimony', 0))
         if total_patrimony == 0:
-            warnings.append("⚠️ Patrimonio total es $0 - Verifica los valores en COP")
+            warnings.append("⚠️ Patrimonio total es $0 - Verifica los valores monetarios en la plantilla")
         
         # Check cash flow
         if flow_analysis:
@@ -3168,7 +3803,64 @@ if st.session_state.data_initialized:
             st.markdown("### 🚨 Alertas del Sistema de Diagnóstico")
             for warning in warnings:
                 st.warning(warning)
-
+# NUEVO: Debug de clasificación de gastos
+if st.button("🔍 Debug: Ver clasificación de gastos", key="debug_gastos_clasificacion"):
+    if 'datos_adicionales' in st.session_state.processed_data:
+        df_datos = st.session_state.processed_data['datos_adicionales']
+        
+        categoria_col = find_exact_column(df_datos, ['Categoría'])
+        subcategoria_col = find_exact_column(df_datos, ['Subcategoria '])
+        valor_col = find_exact_column(df_datos, VALUE_COLUMN_PRIORITY['datos_adicionales'])
+        tipo_col = find_exact_column(df_datos, ['Tipo de Relación'])
+        
+        if all([categoria_col, valor_col, tipo_col]):
+            egresos = df_datos[df_datos[tipo_col] == 'Egreso'].copy()
+            
+            # Agregar columna de clasificación
+            clasificaciones = []
+            for _, row in egresos.iterrows():
+                categoria = str(row[categoria_col]).strip()
+                valor = safe_float(row[valor_col])
+                subcategoria = ""
+                if subcategoria_col and pd.notna(row[subcategoria_col]):
+                    subcategoria = str(row[subcategoria_col]).strip().lower()
+                
+                # Aplicar misma lógica de clasificación
+                if any(kw in subcategoria for kw in ['vacaciones', 'viajes', 'hoteles']):
+                    clasificaciones.append('✈️ VIAJES')
+                elif any(kw in subcategoria for kw in ['joyería', 'relojes', 'lujo', 'arte', 'vinos']):
+                    clasificaciones.append('💎 LUJO')
+                elif any(kw in subcategoria for kw in ['pensión voluntaria', 'pension voluntaria']):
+                    clasificaciones.append('🏦 PENSIÓN VOLUNTARIA')
+                elif any(kw in subcategoria for kw in ['proyecto inmobiliario', 'inmobiliario nuevo']):
+                    clasificaciones.append('🏗️ PROYECTO INMOBILIARIO')
+                elif categoria == 'Gastos Esenciales':
+                    clasificaciones.append('🏠 GASTOS ESENCIALES')
+                elif categoria == 'Gastos Operativos':
+                    clasificaciones.append('⚙️ GASTOS OPERATIVOS')
+                elif categoria == 'Gastos Varios':
+                    clasificaciones.append('📦 GASTOS VARIOS')
+                elif categoria == 'Impuestos':
+                    clasificaciones.append('🏛️ IMPUESTOS')
+                else:
+                    clasificaciones.append('❓ SIN CLASIFICAR')
+            
+            egresos['Clasificación'] = clasificaciones
+            
+            st.markdown("### 🔍 Clasificación de Gastos")
+            display_cols = [categoria_col, subcategoria_col, valor_col, 'Clasificación']
+            st.dataframe(
+                egresos[display_cols],
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            # Resumen por clasificación
+            st.markdown("### 📊 Resumen por Clasificación")
+            resumen = egresos.groupby('Clasificación')[valor_col].sum().reset_index()
+            resumen.columns = ['Clasificación', 'Total']
+            resumen['Total'] = resumen['Total'].apply(lambda x: f"${x:,.0f}")
+            st.dataframe(resumen, use_container_width=True, hide_index=True)
 
 # FOOTER
 st.markdown(f"""
