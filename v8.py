@@ -2775,61 +2775,6 @@ with col3:
     </div>
     """, unsafe_allow_html=True)
 
-# TEMPLATE AND UPLOAD SECTION
-if not st.session_state.data_initialized:
-    st.markdown("""
-    <div class="section-container">
-        <h2 style="color: #1E3A8A; margin-bottom: 1rem;">Sistema de Plantilla Excel Inteligente</h2>
-        <p>Descarga nuestra plantilla Excel preconfigurada siguiendo la metodología Proaltus de radiografía financiera.</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    col1, col2, col3 = st.columns([1, 2, 1])
-    
-    with col2:
-        if st.button("Descargar Plantilla Excel", type="primary", key="download_template"):
-            try:
-                with st.spinner("Preparando plantilla Excel..."):
-                    # Intentar diferentes nombres de archivo posibles
-                    template_files = [
-                        "Final_Plantilla_proaltus.xlsx",
-                        "Plantilla_Proaltus_Test_Data_ultima_version.xlsx",
-                        "Plantilla_Proaltus.xlsx"
-                    ]
-                    
-                    template_data = None
-                    template_found = False
-                    
-                    for template_file in template_files:
-                        try:
-                            with open(template_file, "rb") as f:
-                                template_data = f.read()
-                                template_found = True
-                                break
-                        except FileNotFoundError:
-                            continue
-                    
-                    if template_found and template_data:
-                        st.session_state.template_downloaded = True
-                        
-                        st.download_button(
-                            label="Descargar Plantilla_Proaltus_Portafolio.xlsx",
-                            data=template_data,
-                            file_name=f"Final_Plantilla_proaltus_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key="template_download_button"
-                        )
-                        
-                        st.success("Plantilla lista para descarga!")
-                    else:
-                        st.error("No se encontró el archivo de plantilla. Por favor, asegúrate de que el archivo 'Final_Plantilla_proaltus.xlsx' o 'Plantilla_Proaltus_Test_Data_ultima_version.xlsx' esté en el directorio del proyecto.")
-                        
-            except Exception as e:
-                st.error(f"Error al preparar la plantilla: {str(e)}")
-                import traceback
-                with st.expander("Detalles del error"):
-                    st.code(traceback.format_exc())
-
 # UPLOAD SECTION
 st.markdown("""
 <div class="section-container">
