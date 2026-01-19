@@ -1140,15 +1140,15 @@ def create_cash_flow_graphic(flow_analysis):
         hovertemplate='<b>%{y}</b><br>Valor: $%{x:,.0f}<extra></extra>'
     ))
     
-    # Secondary bar (Gray): Salary Income - shows work dependency
+    # Secondary bar (Blue): Salary Income - shows work dependency
     fig.add_trace(go.Bar(
         y=['Ingreso Salarial'],
         x=[ingresos['ingreso_salarial']],
         orientation='h',
-        marker_color='#F3F4F6',
+        marker_color='#3B82F6',  # Azul medio-oscuro más visible
         text=[f"${ingresos['ingreso_salarial']:,.0f}"],
         textposition='inside',
-        textfont=dict(color='#1F2937', size=14, family="Inter"),
+        textfont=dict(color='white', size=14, family="Inter"),  # Texto blanco para mejor contraste
         name='Ingreso Salarial',
         width=0.4,
         hovertemplate='<b>%{y}</b><br>Valor: $%{x:,.0f}<extra></extra>'
@@ -1944,6 +1944,43 @@ def create_productive_currency_pie_chart(processed_data):
             hide_index=True
         )
 
+def detect_flow_currency(processed_data):
+    """
+    Detecta la moneda del flujo desde la columna 'flujo' en datos_adicionales.
+    Retorna la moneda más común o 'USD' por defecto.
+    """
+    default_currency = 'USD'
+    
+    if 'datos_adicionales' not in processed_data:
+        return default_currency
+    
+    df_datos = processed_data['datos_adicionales']
+    
+    # Buscar la columna 'flujo' (puede estar en diferentes posiciones)
+    flujo_col = find_exact_column(df_datos, ['flujo', 'Flujo', 'FLUJO', 'flujo ', ' Flujo'])
+    
+    if not flujo_col:
+        return default_currency
+    
+    # Obtener todos los valores no nulos de la columna flujo
+    flujo_values = df_datos[flujo_col].dropna().astype(str).str.strip().str.upper()
+    
+    if flujo_values.empty:
+        return default_currency
+    
+    # Filtrar valores válidos (solo letras, sin espacios extra)
+    valid_currencies = flujo_values[flujo_values.str.match(r'^[A-Z]{2,4}$')]
+    
+    if valid_currencies.empty:
+        return default_currency
+    
+    # Obtener la moneda más común
+    currency_counts = valid_currencies.value_counts()
+    most_common_currency = currency_counts.index[0] if len(currency_counts) > 0 else default_currency
+    
+    return most_common_currency
+
+
 def display_cash_flow_table(flow_analysis):
     """Display comprehensive cash flow table according to manual methodology"""
     if not flow_analysis:
@@ -1958,7 +1995,12 @@ def display_cash_flow_table(flow_analysis):
         resumen = flow_analysis.get('resumen', {})
         porcentajes = resumen.get('porcentajes', {})
         
-        st.markdown("""
+        # Detectar la moneda del flujo desde datos_adicionales
+        flow_currency = 'USD'  # Valor por defecto
+        if 'processed_data' in st.session_state and st.session_state.processed_data:
+            flow_currency = detect_flow_currency(st.session_state.processed_data)
+        
+        st.markdown(f"""
         <div style="margin: 2rem 0;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
                 <div style="flex: 1; text-align: center;">
@@ -1968,7 +2010,7 @@ def display_cash_flow_table(flow_analysis):
                 </div>
                 <div style="margin-left: auto;">
                     <span style="background-color: #1E3A8A; color: white; padding: 0.5rem 1rem; border-radius: 6px; font-size: 0.875rem; font-weight: 600;">
-                        Flujo en USD
+                        Flujo en {flow_currency}
                     </span>
                 </div>
             </div>
@@ -2156,7 +2198,21 @@ def create_geographic_distribution_map(processed_data):
                 'Sierra Leone', 'Somalia', 'South Africa', 'South Sudan', 'Sudan',
                 'Tanzania', 'Togo', 'Tunisia', 'Uganda', 'Zambia', 'Zimbabwe'
             ],
-            'ASI': [  # Asia (por si se necesita)
+            'ASIA': [  # Asia
+                'Afghanistan', 'Armenia', 'Azerbaijan', 'Bahrain', 'Bangladesh', 'Bhutan',
+                'Brunei', 'Cambodia', 'China', 'Georgia', 'India', 'Indonesia', 'Iran',
+                'Iraq', 'Israel', 'Japan', 'Jordan', 'Kazakhstan', 'Kuwait', 'Kyrgyzstan',
+                'Laos', 'Lebanon', 'Malaysia', 'Maldives', 'Mongolia', 'Myanmar', 'Nepal',
+                'North Korea', 'Oman', 'Pakistan', 'Palestine', 'Philippines', 'Qatar',
+                'Saudi Arabia', 'Singapore', 'South Korea', 'Sri Lanka', 'Syria', 'Taiwan',
+                'Tajikistan', 'Thailand', 'Timor-Leste', 'Turkey', 'Turkmenistan',
+                'United Arab Emirates', 'Uzbekistan', 'Vietnam', 'Yemen'
+            ],
+            'SA': [  # Sur América
+                'Argentina', 'Bolivia', 'Brazil', 'Chile', 'Colombia', 'Ecuador',
+                'Guyana', 'Paraguay', 'Peru', 'Suriname', 'Uruguay', 'Venezuela'
+            ],
+            'ASI': [  # Alias para compatibilidad (mantener)
                 'Afghanistan', 'Armenia', 'Azerbaijan', 'Bahrain', 'Bangladesh', 'Bhutan',
                 'Brunei', 'Cambodia', 'China', 'Georgia', 'India', 'Indonesia', 'Iran',
                 'Iraq', 'Israel', 'Japan', 'Jordan', 'Kazakhstan', 'Kuwait', 'Kyrgyzstan',
@@ -2236,7 +2292,7 @@ def create_geographic_distribution_map(processed_data):
         color="Valor (M USD)",
         hover_name="Ubicación",
         hover_data={
-            'Valor (M USD)': ':,.0f',
+            'Valor (M USD)': ':,.2f',
             'Cantidad de Activos': ':,',
             'Ubicación': False
         },
@@ -2306,7 +2362,7 @@ def create_geographic_distribution_map(processed_data):
     
     with st.expander("Ver detalle por ubicación"):
         df_display = df_table.copy()
-        df_display['Valor (M USD)'] = df_display['Valor (M USD)'].apply(lambda x: f"${x:,.0f}M")
+        df_display['Valor (M USD)'] = df_display['Valor (M USD)'].apply(lambda x: f"${x:,.2f}M")
         st.dataframe(df_display, use_container_width=True, hide_index=True)
 def create_cost_comparison_chart(processed_data):
     """Create cost comparison chart: Current Management vs Proaltus"""
@@ -2914,6 +2970,111 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
         st.markdown("### Estructura de Gastos")
         create_expenses_mekko_chart(st.session_state.processed_data)
         
+        # DataFrames de Costos de Mantenimiento e Impuestos de Inversiones No Productivas
+        if 'inversiones_no_productivas' in st.session_state.processed_data:
+            df_no_prod = st.session_state.processed_data['inversiones_no_productivas']
+            
+            # Buscar columnas necesarias
+            nombre_col = find_exact_column(df_no_prod, ['Nombre del Activo'])
+            moneda_col = find_exact_column(df_no_prod, ['Moneda', 'Moneda (Lista)', 'Moneda '])
+            valor_local_col = find_exact_column(df_no_prod, ['Valor (Moneda Local)', 'Valor Moneda Local'])
+            impuestos_col = find_exact_column(df_no_prod, ['Impuestos'])
+            
+            # Mostrar los dos dataframes lado a lado
+            st.markdown("---")
+            col1, col2 = st.columns(2)
+            
+            # DataFrame 1: Costo de Mantenimiento - Inversiones No Productivas
+            with col1:
+                st.markdown("### Costo de Mantenimiento - Inversiones No Productivas")
+                
+                if nombre_col and moneda_col and valor_local_col:
+                    # Crear DataFrame con los datos
+                    df_mantenimiento = df_no_prod.copy()
+                    
+                    # Filtrar solo filas con datos válidos (excluir TOTAL)
+                    df_mantenimiento = df_mantenimiento[
+                        (df_mantenimiento[nombre_col].notna()) & 
+                        (df_mantenimiento[nombre_col].astype(str).str.strip() != '') &
+                        (~df_mantenimiento[nombre_col].astype(str).str.upper().str.contains('TOTAL', na=False))
+                    ].copy()
+                    
+                    if not df_mantenimiento.empty:
+                        # Obtener valor en moneda local (columna F)
+                        df_mantenimiento['Valor en Moneda Local'] = pd.to_numeric(
+                            df_mantenimiento[valor_local_col], errors='coerce'
+                        )
+                        
+                        # Crear DataFrame final con las columnas solicitadas
+                        df_mant_final = pd.DataFrame({
+                            'Nombre del Activo': df_mantenimiento[nombre_col].astype(str).str.strip(),
+                            'Valor en Moneda Local': df_mantenimiento['Valor en Moneda Local'].fillna(0),
+                            'Moneda': df_mantenimiento[moneda_col].astype(str).str.strip() if moneda_col else 'N/A'
+                        })
+                        
+                        # Filtrar filas con valor > 0
+                        df_mant_final = df_mant_final[df_mant_final['Valor en Moneda Local'] > 0]
+                        
+                        if not df_mant_final.empty:
+                            st.dataframe(
+                                df_mant_final,
+                                use_container_width=True,
+                                hide_index=True
+                            )
+                        else:
+                            st.info("No hay datos con valores mayores a cero.")
+                    else:
+                        st.info("No se encontraron datos válidos.")
+                else:
+                    missing = []
+                    if not nombre_col: missing.append("Nombre del Activo")
+                    if not moneda_col: missing.append("Moneda")
+                    if not valor_local_col: missing.append("Valor (Moneda Local)")
+                    st.warning(f"Faltan columnas: {', '.join(missing)}")
+            
+            # DataFrame 2: Impuestos - Inversiones No Productivas
+            with col2:
+                st.markdown("### Impuestos - Inversiones No Productivas")
+                
+                if nombre_col and moneda_col and impuestos_col:
+                    # Crear DataFrame con los datos
+                    df_impuestos = df_no_prod.copy()
+                    
+                    # Filtrar solo filas con datos válidos (excluir TOTAL)
+                    df_impuestos = df_impuestos[
+                        (df_impuestos[nombre_col].notna()) & 
+                        (df_impuestos[nombre_col].astype(str).str.strip() != '') &
+                        (~df_impuestos[nombre_col].astype(str).str.upper().str.contains('TOTAL', na=False))
+                    ].copy()
+                    
+                    if not df_impuestos.empty:
+                        # Crear DataFrame final con las columnas solicitadas
+                        df_imp_final = pd.DataFrame({
+                            'Nombre del Activo': df_impuestos[nombre_col].astype(str).str.strip(),
+                            'Valor de Impuestos': pd.to_numeric(df_impuestos[impuestos_col], errors='coerce').fillna(0),
+                            'Moneda': df_impuestos[moneda_col].astype(str).str.strip() if moneda_col else 'N/A'
+                        })
+                        
+                        # Filtrar filas con valor > 0
+                        df_imp_final = df_imp_final[df_imp_final['Valor de Impuestos'] > 0]
+                        
+                        if not df_imp_final.empty:
+                            st.dataframe(
+                                df_imp_final,
+                                use_container_width=True,
+                                hide_index=True
+                            )
+                        else:
+                            st.info("No hay datos con valores mayores a cero.")
+                    else:
+                        st.info("No se encontraron datos válidos.")
+                else:
+                    missing = []
+                    if not nombre_col: missing.append("Nombre del Activo")
+                    if not moneda_col: missing.append("Moneda")
+                    if not impuestos_col: missing.append("Impuestos")
+                    st.warning(f"Faltan columnas: {', '.join(missing)}")
+        
         st.markdown("---")
         
         # INVESTMENT CHARTS - Gráficas 6-8 from Manual
@@ -3176,7 +3337,138 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
             </div>
             """, unsafe_allow_html=True)
     
+    # RENDIMIENTO ESPERADO SECTION
+    st.markdown("---")
+    st.markdown("""
+    <div class="section-container">
+        <h2 style="color: #1E3A8A; margin-bottom: 2rem;">Rendimiento Esperado</h2>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Function to calculate expected return for a given investment type
+    def calculate_expected_return(processed_data, investment_type):
+        """
+        Calcula el rendimiento esperado ponderado por valor.
+        
+        Para cada activo:
+        1. Dividir Valor USD del activo / Total Valor USD
+        2. Multiplicar por su rentabilidad
+        3. Sumar todos los valores
+        4. Multiplicar por 100 para obtener porcentaje
+        """
+        if investment_type not in processed_data:
+            return 0.0
+        
+        df = processed_data[investment_type]
+        
+        # Buscar columna Valor USD (columna J en Excel)
+        valor_usd_col = find_exact_column(df, ['Valor (USD)', 'Valor USD', 'Valor Patrimonial (USD)'])
+        
+        # Buscar columna Rentabilidad (columna M en Excel)
+        rentabilidad_col = find_exact_column(df, [
+            'Rentabilidad (%)',
+            'Rentabilidad',
+            'Rentabilidad %',
+            'Rentabilidad esperada',
+            'Rentabilidad Esperada'
+        ])
+        
+        if not valor_usd_col or not rentabilidad_col:
+            return 0.0
+        
+        # Filtrar filas válidas (excluir TOTAL y filas vacías)
+        df_valid = df.copy()
+        df_valid[valor_usd_col] = pd.to_numeric(df_valid[valor_usd_col], errors='coerce').fillna(0)
+        df_valid[rentabilidad_col] = pd.to_numeric(df_valid[rentabilidad_col], errors='coerce').fillna(0)
+        
+        # Excluir filas con "TOTAL" en la primera columna
+        primera_col = df_valid.columns[0]
+        df_valid = df_valid[
+            (~df_valid[primera_col].astype(str).str.upper().str.contains('TOTAL', na=False)) &
+            (df_valid[valor_usd_col] > 0) &
+            (df_valid[rentabilidad_col] > 0)
+        ]
+        
+        if df_valid.empty:
+            return 0.0
+        
+        # Calcular total de Valor USD
+        total_valor_usd = df_valid[valor_usd_col].sum()
+        
+        if total_valor_usd == 0:
+            return 0.0
+        
+        # Calcular rendimiento esperado ponderado
+        # Para cada activo: (Valor USD / Total) * Rentabilidad
+        weighted_returns = (df_valid[valor_usd_col] / total_valor_usd) * df_valid[rentabilidad_col]
+        
+        # Sumar todos los valores y multiplicar por 100
+        expected_return = weighted_returns.sum() * 100
+        
+        return round(expected_return, 2)
+    
+    # Calcular rendimientos esperados
+    return_productivas = calculate_expected_return(st.session_state.processed_data, 'inversiones_productivas')
+    return_financieras = calculate_expected_return(st.session_state.processed_data, 'inversiones_financieras')
+    
+    # Crear gráfico de barras horizontal
+    categories = ['Inversiones Productivas', 'Inversiones Financieras']
+    returns = [return_productivas, return_financieras]
+    
+    fig = go.Figure()
+    
+    # Colores diferenciados para cada tipo
+    colors = ['#10B981', '#3B82F6']  # Verde para productivas, Azul para financieras
+    
+    fig.add_trace(go.Bar(
+        y=categories,
+        x=returns,
+        orientation='h',
+        marker=dict(
+            color=colors,
+            line=dict(color='white', width=2),
+            opacity=0.9
+        ),
+        text=[f"{r:.2f}%" for r in returns],
+        textposition='outside',
+        textfont=dict(size=14, color='#1F2937', family="Inter"),
+        hovertemplate='<b>%{y}</b><br>Rendimiento Esperado: <b>%{x:.2f}%</b><extra></extra>'
+    ))
+    
+    # Calcular máximo para el rango del eje X
+    max_return = max(returns) if returns else 10
+    x_max = max(10, max_return * 1.3)
+    
+    fig.update_layout(
+        title="",
+        height=250,
+        paper_bgcolor='white',
+        plot_bgcolor='white',
+        xaxis=dict(
+            showgrid=True,
+            gridcolor='#E5E7EB',
+            gridwidth=1,
+            title="Rendimiento Esperado %",
+            titlefont=dict(size=14, color='#1F2937', family="Inter"),
+            tickfont=dict(size=12, color='#4B5563', family="Inter"),
+            ticksuffix='%',
+            range=[0, x_max]
+        ),
+        yaxis=dict(
+            showgrid=False,
+            title="Tipo de Inversión",
+            titlefont=dict(size=14, color='#1F2937', family="Inter"),
+            tickfont=dict(size=12, color='#4B5563', family="Inter")
+        ),
+        font=dict(family="Inter"),
+        margin=dict(l=200, r=50, t=30, b=50),
+        bargap=0.4
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
     # REPORTS AND ACTIONS
+    st.markdown("---")
     st.markdown("""
     <div class="section-container">
         <h2 style="color: #1E3A8A; margin-bottom: 2rem;">Reportes y Exportación</h2>
