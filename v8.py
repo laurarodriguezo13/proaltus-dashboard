@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -3576,39 +3577,6 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
             st.rerun()
 
 
-    # DEBUG SECTION
-    with st.expander("🔍 Debug Info - Validación de Datos", expanded=False):
-        if st.session_state.processed_data:
-            st.write("**Hojas procesadas según metodología:**")
-            for sheet_name, df in st.session_state.processed_data.items():
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.write(f"**{sheet_name}**")
-                with col2:
-                    st.write(f"Filas: {len(df)}")
-                with col3:
-                    st.write(f"Columnas: {len(df.columns)}")
-                
-                if st.button(f"Ver columnas de {sheet_name}", key=f"debug_{sheet_name}"):
-                    st.write("Columnas disponibles:")
-                    for i, col in enumerate(df.columns):
-                        st.write(f"{i+1}. {col}")
-        
-        # DEBUG TEMPORAL PARA COLUMNAS
-        if st.button("Debug Column Names", key="debug_columns"):
-            debug_column_names(st.session_state.processed_data)
-        
-        if flow_analysis:
-            st.write("**Fórmulas aplicadas según manual técnico:**")
-            st.json({
-                "Ecuación 1 - Patrimonio Total": f"${kpis.get('total_patrimony', 0):,.0f}",
-                "Ecuación 2 - FCN": f"${flow_analysis['resumen']['resultado_neto']:,.0f}",
-                "Ecuación 3 - Ingresos Totales": f"${flow_analysis['ingresos']['total']:,.0f}",
-                "Ecuación 4 - Egresos Totales": f"${flow_analysis['resumen']['total_egresos']:,.0f}",
-                "Ecuación 5 - Tasa de Ahorro": f"{flow_analysis['resumen']['porcentajes']['resultado_neto']:.1f}%",
-                "Ecuación 6 - Conteo Activos": int(kpis.get('asset_count', 0))
-            })
-
 # VALIDATION AND WARNINGS
 if st.session_state.data_initialized:
     if st.session_state.processed_data:
@@ -3641,65 +3609,6 @@ if st.session_state.data_initialized:
             st.markdown("### 🚨 Alertas del Sistema de Diagnóstico")
             for warning in warnings:
                 st.warning(warning)
-# NUEVO: Debug de clasificación de gastos
-if st.button("🔍 Debug: Ver clasificación de gastos", key="debug_gastos_clasificacion"):
-    if 'datos_adicionales' in st.session_state.processed_data:
-        df_datos = st.session_state.processed_data['datos_adicionales']
-        
-        categoria_col = find_exact_column(df_datos, ['Categoría'])
-        subcategoria_col = find_exact_column(df_datos, ['Subcategoria '])
-        valor_col = find_exact_column(df_datos, VALUE_COLUMN_PRIORITY['datos_adicionales'])
-        tipo_col = find_exact_column(df_datos, ['Tipo de Relación'])
-        
-        if all([categoria_col, valor_col, tipo_col]):
-            egresos = df_datos[df_datos[tipo_col] == 'Egreso'].copy()
-            
-            # Agregar columna de clasificación
-            clasificaciones = []
-            for _, row in egresos.iterrows():
-                categoria = str(row[categoria_col]).strip()
-                valor = safe_float(row[valor_col])
-                subcategoria = ""
-                if subcategoria_col and pd.notna(row[subcategoria_col]):
-                    subcategoria = str(row[subcategoria_col]).strip().lower()
-                
-                # Aplicar misma lógica de clasificación
-                if any(kw in subcategoria for kw in ['vacaciones', 'viajes', 'hoteles']):
-                    clasificaciones.append('✈️ VIAJES')
-                elif any(kw in subcategoria for kw in ['joyería', 'relojes', 'lujo', 'arte', 'vinos']):
-                    clasificaciones.append('💎 LUJO')
-                elif any(kw in subcategoria for kw in ['pensión voluntaria', 'pension voluntaria']):
-                    clasificaciones.append('🏦 PENSIÓN VOLUNTARIA')
-                elif any(kw in subcategoria for kw in ['proyecto inmobiliario', 'inmobiliario nuevo']):
-                    clasificaciones.append('🏗️ PROYECTO INMOBILIARIO')
-                elif categoria == 'Gastos Esenciales':
-                    clasificaciones.append('🏠 GASTOS ESENCIALES')
-                elif categoria == 'Gastos Operativos':
-                    clasificaciones.append('⚙️ GASTOS OPERATIVOS')
-                elif categoria == 'Gastos Varios':
-                    clasificaciones.append('📦 GASTOS VARIOS')
-                elif categoria == 'Impuestos':
-                    clasificaciones.append('🏛️ IMPUESTOS')
-                else:
-                    clasificaciones.append('❓ SIN CLASIFICAR')
-            
-            egresos['Clasificación'] = clasificaciones
-            
-            st.markdown("### 🔍 Clasificación de Gastos")
-            display_cols = [categoria_col, subcategoria_col, valor_col, 'Clasificación']
-            st.dataframe(
-                egresos[display_cols],
-                use_container_width=True,
-                hide_index=True
-            )
-            
-            # Resumen por clasificación
-            st.markdown("### 📊 Resumen por Clasificación")
-            resumen = egresos.groupby('Clasificación')[valor_col].sum().reset_index()
-            resumen.columns = ['Clasificación', 'Total']
-            resumen['Total'] = resumen['Total'].apply(lambda x: f"${x:,.0f}")
-            st.dataframe(resumen, use_container_width=True, hide_index=True)
-
 # FOOTER
 st.markdown(f"""
 <div style="margin-top: 4rem; padding: 2rem 0; text-align: center; color: #6B7280; border-top: 1px solid #E5E7EB;">
@@ -3715,3 +3624,4 @@ st.markdown(f"""
     </div>
 </div>
 """, unsafe_allow_html=True)
+
