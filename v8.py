@@ -1193,214 +1193,6 @@ def create_cash_flow_graphic(flow_analysis):
     
     st.plotly_chart(fig, use_container_width=True)
 
-def create_maintenance_costs_graphic(processed_data):
-    """Create maintenance costs graphic - Gráfica 3 - CORREGIDO"""
-    if 'inversiones_no_productivas' not in processed_data:
-        st.warning("No non-productive investment data")
-        return
-    
-    df_no_prod = processed_data['inversiones_no_productivas']
-    
-    name_col = find_exact_column(df_no_prod, ['Nombre del Activo'])
-    moneda_col = find_exact_column(df_no_prod, ['Moneda (Lista)'])
-    
-    # Usar la nueva columna 'Costo mantenimiento' (ya es mensual)
-    costo_mant_col = find_exact_column(df_no_prod, ['Costo mantenimiento'])
-
-    if not costo_mant_col:
-        st.warning(f"'Costo mantenimiento' column not found. Available: {list(df_no_prod.columns)}")
-        return
-
-    nombres = []
-    costos_mensuales = []
-    monedas = []
-
-    df_valid = df_no_prod.copy()
-    df_valid[costo_mant_col] = pd.to_numeric(df_valid[costo_mant_col], errors='coerce').fillna(0)
-
-    for _, row in df_valid.iterrows():
-        costo_anual = safe_float(row[costo_mant_col])
-        # Convertir de anual a mensual
-        costo_mensual = costo_anual / 12
-        
-        if costo_mensual > 0:
-            nombres.append(str(row[name_col]))
-            costos_mensuales.append(costo_mensual)
-            if moneda_col and pd.notna(row[moneda_col]):
-                monedas.append(str(row[moneda_col]).strip())
-            else:
-                monedas.append('N/A')
-        
-        if not costos_mensuales:
-            st.warning("No valid maintenance cost data")
-            return
-    
-    # Crear dataframe con los datos
-    df_display = pd.DataFrame({
-        'Nombre': nombres,
-        'Moneda': monedas,
-        'Valor': costos_mensuales
-    })
-    
-    # Formatear valores para mostrar
-    df_display['Valor Formateado'] = df_display.apply(
-        lambda x: f"${x['Valor']:,.0f} {x['Moneda']}" if x['Moneda'] != 'N/A' else f"${x['Valor']:,.0f}",
-        axis=1
-    )
-    
-    # Mostrar dataframe
-    st.markdown("#### 📊 Detalle de Costos de Mantenimiento Mensual")
-    st.dataframe(
-        df_display[['Nombre', 'Moneda', 'Valor Formateado']].rename(columns={'Valor Formateado': 'Valor'}),
-        use_container_width=True,
-        hide_index=True
-    )
-    st.markdown("---")
-    
-    max_costo = max(costos_mensuales) if costos_mensuales else 0
-    colors = []
-    
-    for i, costo in enumerate(costos_mensuales):
-        if costo == max_costo:
-            colors.append('#1E3A8A')
-        elif costo > max_costo * 0.5:
-            colors.append('#3B82F6')
-        elif costo > max_costo * 0.2:
-            colors.append('#60A5FA')
-        else:
-            colors.append('#9CA3AF')
-    
-    fig = go.Figure(go.Bar(
-        x=nombres,
-        y=costos_mensuales,
-        marker_color=colors,
-        text=[f"${c:,.0f}" if c > 0 else "" for c in costos_mensuales],
-        textposition='outside',
-        textfont=dict(size=10, color='#1F2937', family="Inter"),
-        hovertemplate='<b>%{x}</b><br>Costo Mensual: $%{y:,.0f}<extra></extra>'
-    ))
-    
-    fig.update_layout(
-        title="Costo Mensual Mantenimiento Inversiones No Productivas",
-        title_font_size=16,
-        title_font_color='#1F2937',
-        title_font_family="Inter",
-        height=400,
-        paper_bgcolor='white',
-        plot_bgcolor='white',
-        xaxis=dict(
-            showgrid=False, 
-            tickangle=45, 
-            tickfont=dict(size=10, family="Inter")
-        ),
-        yaxis=dict(
-            showgrid=True, 
-            gridcolor='#F3F4F6', 
-            tickformat='$,.0f',
-            tickfont=dict(size=10, family="Inter")
-        ),
-        font=dict(family="Inter"),
-        margin=dict(l=50, r=50, t=80, b=120)
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
-
-def create_taxes_graphic(processed_data):
-    """Create taxes graphic - Gráfica 4"""
-    if 'inversiones_no_productivas' not in processed_data:
-        st.warning("No non-productive investment data")
-        return
-    
-    df_no_prod = processed_data['inversiones_no_productivas']
-    
-    tax_col = find_exact_column(df_no_prod, ['Impuestos'])
-    name_col = find_exact_column(df_no_prod, ['Nombre del Activo'])
-    moneda_col = find_exact_column(df_no_prod, ['Moneda (Lista)'])
-    
-    if not tax_col or not name_col:
-        st.warning(f"Tax columns not found. Available: {list(df_no_prod.columns)}")
-        return
-    
-    df_valid = df_no_prod.copy()
-    df_valid[tax_col] = pd.to_numeric(df_valid[tax_col], errors='coerce').fillna(0)
-    df_valid = df_valid[df_valid[tax_col] > 0]
-    
-    if df_valid.empty:
-        st.warning("No valid tax data")
-        return
-    
-    nombres = df_valid[name_col].tolist()
-    impuestos = df_valid[tax_col].tolist()
-    # Convert annual taxes to monthly (Equation 13)
-    impuestos_mensuales = [i/12 for i in impuestos]
-    
-    # Obtener monedas
-    monedas = []
-    for _, row in df_valid.iterrows():
-        if moneda_col and pd.notna(row[moneda_col]):
-            monedas.append(str(row[moneda_col]).strip())
-        else:
-            monedas.append('N/A')
-    
-    # Crear dataframe con los datos
-    df_display = pd.DataFrame({
-        'Nombre': nombres,
-        'Moneda': monedas,
-        'Valor': impuestos_mensuales
-    })
-    
-    # Formatear valores para mostrar
-    df_display['Valor Formateado'] = df_display.apply(
-        lambda x: f"${x['Valor']:,.0f} {x['Moneda']}" if x['Moneda'] != 'N/A' else f"${x['Valor']:,.0f}",
-        axis=1
-    )
-    
-    # Mostrar dataframe
-    st.markdown("#### 📊 Detalle de Impuestos Mensuales")
-    st.dataframe(
-        df_display[['Nombre', 'Moneda', 'Valor Formateado']].rename(columns={'Valor Formateado': 'Valor'}),
-        use_container_width=True,
-        hide_index=True
-    )
-    st.markdown("---")
-    
-    colors = ['#1E3A8A', '#3B82F6', '#60A5FA', '#93C5FD', '#DBEAFE', '#F3F4F6'][:len(nombres)]
-    
-    fig = go.Figure(go.Bar(
-        y=nombres,
-        x=impuestos_mensuales,
-        orientation='h',
-        marker_color=colors,
-        text=[f"${i:,.0f}" if i > 0 else "" for i in impuestos_mensuales],
-        textposition='auto',
-        textfont=dict(color='white', size=10, family="Inter"),
-        hovertemplate='<b>%{y}</b><br>Impuesto Mensual: $%{x:,.0f}<extra></extra>'
-    ))
-    
-    fig.update_layout(
-        title="Impuestos Mensuales Inversiones No Productivas",
-        title_font_size=16,
-        title_font_color='#1F2937',
-        title_font_family="Inter",
-        height=400,
-        paper_bgcolor='white',
-        plot_bgcolor='white',
-        xaxis=dict(
-            showgrid=True, 
-            gridcolor='#F3F4F6', 
-            tickformat='$,.0f',
-            tickfont=dict(size=10, family="Inter")
-        ),
-        yaxis=dict(
-            showgrid=False, 
-            tickfont=dict(size=10, family="Inter")
-        ),
-        margin=dict(l=200, r=50, t=80, b=50),
-        font=dict(family="Inter")
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
-
 def create_financial_investments_chart(processed_data):
     """Create financial investments chart"""
     if 'inversiones_financieras' not in processed_data:
@@ -1448,7 +1240,7 @@ def create_financial_investments_chart(processed_data):
     )
     
     fig.update_layout(
-        title="Inversiones Financieras por Tipo",
+        title="Inversiones Financieras por Asset Class",
         title_font_size=16,
         title_font_color='#1F2937',
         title_font_family="Inter",
@@ -2167,11 +1959,20 @@ def display_cash_flow_table(flow_analysis):
         porcentajes = resumen.get('porcentajes', {})
         
         st.markdown("""
-        <div style="text-align: center; margin: 2rem 0;">
-            <h2 style="color: #1E3A8A; font-weight: 700; font-size: 1.5rem; margin-bottom: 0.5rem;">
-                ANÁLISIS DE FLUJO DE EFECTIVO REQUERIDO
-            </h2>
-            <p style="color: #6B7280; font-size: 0.875rem;">
+        <div style="margin: 2rem 0;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                <div style="flex: 1; text-align: center;">
+                    <h2 style="color: #1E3A8A; font-weight: 700; font-size: 1.5rem; margin: 0;">
+                        ANÁLISIS DE FLUJO DE EFECTIVO REQUERIDO
+                    </h2>
+                </div>
+                <div style="margin-left: auto;">
+                    <span style="background-color: #1E3A8A; color: white; padding: 0.5rem 1rem; border-radius: 6px; font-size: 0.875rem; font-weight: 600;">
+                        Flujo en USD
+                    </span>
+                </div>
+            </div>
+            <p style="color: #6B7280; font-size: 0.875rem; text-align: center;">
                 Metodología Proaltus de Priorización de Gastos (Mensual)
             </p>
         </div>
@@ -2290,94 +2091,11 @@ def display_cash_flow_table(flow_analysis):
     except Exception as e:
         st.error(f"Error displaying cash flow table: {str(e)}")
 
-def create_return_graphic():
-    """Create expected returns chart - Gráfica 10 - Enhanced version"""
-    categories = [
-        'Empresas',
-        'Inversiones No productivas\n(Terrenos, Aviones, bienes inmuebles...)',
-        'Inversiones Productivas', 
-        'Inversiones Financieras'
-    ]
-    
-    # Reference values according to manual
-    returns = [3, 2, 8, 7]
-    
-    # Enhanced color palette - more attractive and differentiated
-    colors = [
-        '#1E3A8A',  # Empresas - Dark blue
-        '#3B82F6',  # Inversiones No productivas - Medium blue
-        '#10B981',  # Inversiones Productivas - Green (highest return)
-        '#8B5CF6'   # Inversiones Financieras - Purple
-    ]
-    
-    # Create bar chart with individual colors for each bar
-    fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        x=categories,
-        y=returns,
-        marker=dict(
-            color=colors,
-            line=dict(color='white', width=2),
-            opacity=0.9
-        ),
-        text=[f"{r}%" for r in returns],
-        textposition='outside',
-        textfont=dict(size=14, color='#1F2937', family="Inter"),
-        hovertemplate='<b>%{x}</b><br>Rendimiento Esperado: <b>%{y}%</b><extra></extra>'
-    ))
-    
-    # Find max return for better y-axis range
-    max_return = max(returns)
-    y_max = max(10, max_return * 1.2)
-    
-    fig.update_layout(
-        title=dict(
-            text="Rendimiento Esperado por Categoría de Activos",
-            font=dict(size=18, color='#1F2937', family="Inter"),
-            x=0.5,
-            xanchor='center'
-        ),
-        height=500,
-        paper_bgcolor='#FAFAFA',
-        plot_bgcolor='white',
-        xaxis=dict(
-            showgrid=False, 
-            tickangle=45, 
-            tickfont=dict(size=12, color='#4B5563', family="Inter"),
-            title=dict(
-                text="Categoría de Activos",
-                font=dict(size=14, color='#1F2937', family="Inter")
-            ),
-            linecolor='#E5E7EB',
-            linewidth=1
-        ),
-        yaxis=dict(
-            showgrid=True, 
-            gridcolor='#E5E7EB',
-            gridwidth=1,
-            ticksuffix='%',
-            range=[0, y_max],
-            tickfont=dict(size=12, color='#4B5563', family="Inter"),
-            title=dict(
-                text="Rendimiento Esperado (%)",
-                font=dict(size=14, color='#1F2937', family="Inter")
-            ),
-            linecolor='#E5E7EB',
-            linewidth=1
-        ),
-        font=dict(family="Inter"),
-        margin=dict(l=80, r=50, t=100, b=180),
-        bargap=0.3,
-        hovermode='closest'
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
-
 def create_geographic_distribution_map(processed_data):
     """Create interactive map showing asset distribution by geography"""
     
-    geographic_data = {}
+    geographic_data = {}  # Para el mapa (países expandidos)
+    region_data = {}  # Para la tabla (regiones consolidadas)
     
     # Collect data from all investment types
     sheets_config = {
@@ -2416,13 +2134,78 @@ def create_geographic_distribution_map(processed_data):
             'CHN': 'China'
         }
         
+        # Mapping de regiones a listas de países
+        region_mapping = {
+            'EU': [  # Europa
+                'Albania', 'Andorra', 'Austria', 'Belarus', 'Belgium', 'Bosnia and Herzegovina',
+                'Bulgaria', 'Croatia', 'Cyprus', 'Czech Republic', 'Denmark', 'Estonia',
+                'Finland', 'France', 'Germany', 'Greece', 'Hungary', 'Iceland', 'Ireland',
+                'Italy', 'Latvia', 'Liechtenstein', 'Lithuania', 'Luxembourg', 'Malta',
+                'Moldova', 'Monaco', 'Montenegro', 'Netherlands', 'North Macedonia', 'Norway',
+                'Poland', 'Portugal', 'Romania', 'Russia', 'San Marino', 'Serbia', 'Slovakia',
+                'Slovenia', 'Spain', 'Sweden', 'Switzerland', 'Ukraine', 'United Kingdom'
+            ],
+            'AFR': [  # África
+                'Algeria', 'Angola', 'Benin', 'Botswana', 'Burkina Faso', 'Burundi',
+                'Cameroon', 'Cape Verde', 'Central African Republic', 'Chad', 'Comoros',
+                'Congo', 'Cote d\'Ivoire', 'Djibouti', 'Egypt', 'Equatorial Guinea',
+                'Eritrea', 'Ethiopia', 'Gabon', 'Gambia', 'Ghana', 'Guinea', 'Guinea-Bissau',
+                'Kenya', 'Lesotho', 'Liberia', 'Libya', 'Madagascar', 'Malawi', 'Mali',
+                'Mauritania', 'Mauritius', 'Morocco', 'Mozambique', 'Namibia', 'Niger',
+                'Nigeria', 'Rwanda', 'Sao Tome and Principe', 'Senegal', 'Seychelles',
+                'Sierra Leone', 'Somalia', 'South Africa', 'South Sudan', 'Sudan',
+                'Tanzania', 'Togo', 'Tunisia', 'Uganda', 'Zambia', 'Zimbabwe'
+            ],
+            'ASI': [  # Asia (por si se necesita)
+                'Afghanistan', 'Armenia', 'Azerbaijan', 'Bahrain', 'Bangladesh', 'Bhutan',
+                'Brunei', 'Cambodia', 'China', 'Georgia', 'India', 'Indonesia', 'Iran',
+                'Iraq', 'Israel', 'Japan', 'Jordan', 'Kazakhstan', 'Kuwait', 'Kyrgyzstan',
+                'Laos', 'Lebanon', 'Malaysia', 'Maldives', 'Mongolia', 'Myanmar', 'Nepal',
+                'North Korea', 'Oman', 'Pakistan', 'Palestine', 'Philippines', 'Qatar',
+                'Saudi Arabia', 'Singapore', 'South Korea', 'Sri Lanka', 'Syria', 'Taiwan',
+                'Tajikistan', 'Thailand', 'Timor-Leste', 'Turkey', 'Turkmenistan',
+                'United Arab Emirates', 'Uzbekistan', 'Vietnam', 'Yemen'
+            ],
+            'LATAM': [  # Latinoamérica (por si se necesita)
+                'Argentina', 'Belize', 'Bolivia', 'Brazil', 'Chile', 'Colombia', 'Costa Rica',
+                'Cuba', 'Dominican Republic', 'Ecuador', 'El Salvador', 'Guatemala', 'Guyana',
+                'Haiti', 'Honduras', 'Jamaica', 'Mexico', 'Nicaragua', 'Panama', 'Paraguay',
+                'Peru', 'Suriname', 'Trinidad and Tobago', 'Uruguay', 'Venezuela'
+            ]
+        }
+        
         for _, row in df.iterrows():
             geografia_raw = str(row[geo_col]).strip().upper() if pd.notna(row[geo_col]) else 'No especificado'
-            # Convertir código a nombre completo
-            geografia = country_mapping.get(geografia_raw, geografia_raw)
             valor = safe_float(row[valor_col])
             
-            if valor > 0 and geografia and geografia.lower() not in ['nan', '', 'none', 'no especificado']:
+            if valor <= 0 or geografia_raw.lower() in ['nan', '', 'none', 'no especificado']:
+                continue
+            
+            # Primero verificar si es una región
+            if geografia_raw in region_mapping:
+                # Es una región, guardar en region_data para la tabla
+                region_name = geografia_raw  # Usar el código de región (EU, AFR, etc.)
+                if region_name in region_data:
+                    region_data[region_name]['valor'] += valor
+                    region_data[region_name]['cantidad'] += 1
+                else:
+                    region_data[region_name] = {'valor': valor, 'cantidad': 1}
+                
+                # Expandir a todos los países de la región para el mapa
+                # Cada país de la región muestra el valor completo
+                countries_in_region = region_mapping[geografia_raw]
+                for country in countries_in_region:
+                    if country in geographic_data:
+                        # Usar max() para evitar sumar múltiples veces el mismo valor de región
+                        # O mejor: sumar siempre ya que pueden haber múltiples activos en la región
+                        geographic_data[country]['valor'] += valor
+                        geographic_data[country]['cantidad'] += 1
+                    else:
+                        geographic_data[country] = {'valor': valor, 'cantidad': 1}
+            else:
+                # No es una región, usar el mapeo de países o el valor directo
+                geografia = country_mapping.get(geografia_raw, geografia_raw)
+                
                 if geografia in geographic_data:
                     geographic_data[geografia]['valor'] += valor
                     geographic_data[geografia]['cantidad'] += 1
@@ -2493,9 +2276,36 @@ def create_geographic_distribution_map(processed_data):
     
     st.plotly_chart(fig, use_container_width=True)
     
-    # Summary table
+    # Summary table - usar region_data para regiones y países individuales
+    table_data = []
+    
+    # Agregar regiones a la tabla
+    for region_code, data in region_data.items():
+        table_data.append({
+            'Ubicación': region_code,
+            'Valor (M USD)': data['valor'] / 1_000_000,
+            'Cantidad de Activos': data['cantidad']
+        })
+    
+    # Crear conjunto de países que pertenecen a regiones expandidas
+    countries_in_regions = set()
+    for region_code in region_data.keys():
+        if region_code in region_mapping:
+            countries_in_regions.update(region_mapping[region_code])
+    
+    # Agregar países individuales que NO están en regiones expandidas
+    for country, data in geographic_data.items():
+        if country not in countries_in_regions:
+            table_data.append({
+                'Ubicación': country,
+                'Valor (M USD)': data['valor'] / 1_000_000,
+                'Cantidad de Activos': data['cantidad']
+            })
+    
+    df_table = pd.DataFrame(table_data).sort_values('Valor (M USD)', ascending=False)
+    
     with st.expander("Ver detalle por ubicación"):
-        df_display = df_map.copy()
+        df_display = df_table.copy()
         df_display['Valor (M USD)'] = df_display['Valor (M USD)'].apply(lambda x: f"${x:,.0f}M")
         st.dataframe(df_display, use_container_width=True, hide_index=True)
 def create_cost_comparison_chart(processed_data):
@@ -2507,50 +2317,37 @@ def create_cost_comparison_chart(processed_data):
     
     df_fin = processed_data['inversiones_financieras']
     
-    # Find columns - NOMBRES CORRECTOS DEL EXCEL
-    nombre_col = find_exact_column(df_fin, ['Nombre del Activo'])
-    valor_col = find_exact_column(df_fin, VALUE_COLUMN_PRIORITY['default'])
-    fee_actual_pct_col = find_exact_column(df_fin, [
-        'Management Fee Actual (%)',
-        'Management Fee Actual(%)',
-        'Management Fee Actual (%) '
-    ])
-    fee_proaltus_pct_col = find_exact_column(df_fin, [
-        'Costo Proaltus (%)',
-        'Costo Proaltus(%)',
-        'Costo Proaltus (%) '
+    # Buscar columnas R y T directamente del Excel
+    # Columna R: Costo mantenimiento (costo actual)
+    costo_mantenimiento_col = find_exact_column(df_fin, [
+        'Costo mantenimiento',
+        'Costo mantenimiento ',
+        ' Costo mantenimiento'
     ])
     
-    if not all([nombre_col, valor_col, fee_actual_pct_col, fee_proaltus_pct_col]):
+    # Columna T: Costo Total Proaltus ($) (costo Proaltus)
+    costo_total_proaltus_col = find_exact_column(df_fin, [
+        'Costo Total Proaltus ($)',
+        'Costo Total Proaltus ($) ',
+        'Costo Total Proaltus',
+        'Costo Total Proatus ($)'
+    ])
+    
+    if not costo_mantenimiento_col or not costo_total_proaltus_col:
         missing = []
-        if not nombre_col: missing.append('Nombre del Activo')
-        if not valor_col: missing.append('Valor monetario')
-        if not fee_actual_pct_col: missing.append('Management Fee Actual (%)')
-        if not fee_proaltus_pct_col: missing.append('Costo Proaltus (%)')
+        if not costo_mantenimiento_col: missing.append('Costo mantenimiento')
+        if not costo_total_proaltus_col: missing.append('Costo Total Proaltus ($)')
         st.warning(f"Required columns not found: {missing}. Available: {list(df_fin.columns)}")
         return
     
-    # Calculate totals
+    # Convertir a numérico y sumar todos los valores de cada columna
     df_valid = df_fin.copy()
-    df_valid[valor_col] = pd.to_numeric(df_valid[valor_col], errors='coerce').fillna(0)
-    df_valid[fee_actual_pct_col] = pd.to_numeric(df_valid[fee_actual_pct_col], errors='coerce').fillna(0)
-    df_valid[fee_proaltus_pct_col] = pd.to_numeric(df_valid[fee_proaltus_pct_col], errors='coerce').fillna(0)
+    df_valid[costo_mantenimiento_col] = pd.to_numeric(df_valid[costo_mantenimiento_col], errors='coerce').fillna(0)
+    df_valid[costo_total_proaltus_col] = pd.to_numeric(df_valid[costo_total_proaltus_col], errors='coerce').fillna(0)
     
-    # Calcular costos totales anuales
-    total_actual = 0
-    total_proaltus = 0
-    
-    for _, row in df_valid.iterrows():
-        valor = safe_float(row[valor_col])
-        fee_actual_pct = safe_float(row[fee_actual_pct_col])
-        fee_proaltus_pct = safe_float(row[fee_proaltus_pct_col])
-        
-        # Costo anual = Valor × Fee% / 100
-        costo_actual_anual = valor * (fee_actual_pct / 100)
-        costo_proaltus_anual = valor * (fee_proaltus_pct / 100)
-        
-        total_actual += costo_actual_anual
-        total_proaltus += costo_proaltus_anual
+    # Sumar todos los valores de cada columna
+    total_actual = safe_float(df_valid[costo_mantenimiento_col].sum())
+    total_proaltus = safe_float(df_valid[costo_total_proaltus_col].sum())
     
     ahorro_anual = total_actual - total_proaltus
     ahorro_mensual = ahorro_anual / 12
@@ -2660,7 +2457,7 @@ def save_chart_as_image(fig, filename, width=800, height=500):
         return None
     
 def generate_pdf_report(flow_analysis, kpis, processed_data):
-    """Generate comprehensive PDF report with ALL charts and data"""
+    """Generate PDF report with Executive Summary and Cash Flow Analysis"""
     if not PDF_AVAILABLE:
         st.error("PDF libraries not available.")
         return None
@@ -2820,268 +2617,6 @@ def generate_pdf_report(flow_analysis, kpis, processed_data):
             
             story.append(flow_table)
             story.append(Spacer(1, 30))
-        
-        # ===== NOW ADD ALL CHARTS =====
-        story.append(Paragraph("ANÁLISIS GRÁFICO", subtitle_style))
-        story.append(Spacer(1, 10))
-        
-        try:
-            # 1. CASH FLOW CHART
-            if flow_analysis:
-                story.append(Paragraph("Gráfica 1: Estructura de Ingresos", subtitle_style))
-                
-                ingresos = flow_analysis['ingresos']
-                fig = go.Figure()
-                
-                fig.add_trace(go.Bar(
-                    y=['Ingreso Total'],
-                    x=[ingresos['total']],
-                    orientation='h',
-                    marker_color='#1E3A8A',
-                    text=[f"${ingresos['total']:,.0f}"],
-                    textposition='inside',
-                    textfont=dict(color='white', size=12)
-                ))
-                
-                fig.add_trace(go.Bar(
-                    y=['Ingreso Salarial'],
-                    x=[ingresos['ingreso_salarial']],
-                    orientation='h',
-                    marker_color='#F3F4F6',
-                    text=[f"${ingresos['ingreso_salarial']:,.0f}"],
-                    textposition='inside',
-                    textfont=dict(color='#1F2937', size=12)
-                ))
-                
-                fig.add_trace(go.Bar(
-                    y=['Ingresos Pasivos'],
-                    x=[ingresos['ingresos_pasivos']],
-                    orientation='h',
-                    marker_color='#60A5FA',
-                    text=[f"${ingresos['ingresos_pasivos']:,.0f}"],
-                    textposition='inside',
-                    textfont=dict(color='white', size=12)
-                ))
-                
-                fig.update_layout(
-                    height=300,
-                    showlegend=False,
-                    paper_bgcolor='white',
-                    plot_bgcolor='white',
-                    xaxis=dict(showgrid=False, showticklabels=False),
-                    yaxis=dict(categoryorder='array', categoryarray=['Ingresos Pasivos', 'Ingreso Salarial', 'Ingreso Total']),
-                    margin=dict(l=100, r=50, t=20, b=50)
-                )
-                
-                img_path = save_chart_as_image(fig, 'cash_flow.png', width=700, height=300)
-                if img_path:
-                    chart_images.append(img_path)
-                    story.append(Image(img_path, width=5.5*inch, height=2.4*inch))
-                    story.append(Spacer(1, 20))
-                
-                # 2. EXPENSE STRUCTURE CHART
-            if flow_analysis:
-                story.append(Paragraph("Gráfica 2: Estructura de Gastos", subtitle_style))
-                
-                
-                gastos = flow_analysis['gastos']
-                inversiones = flow_analysis['inversiones']
-                impuestos = flow_analysis['impuestos']
-                resumen = flow_analysis['resumen']
-
-                categories_gastos = ['GASTOS', 'INV', 'IMP']
-                values_gastos = [
-                    gastos['total'],
-                    inversiones['total'],
-                    impuestos['total']
-]
-                colors_gastos = ['#1E3A8A', '#3B82F6', '#60A5FA', '#93C5FD']
-                
-                fig_gastos = go.Figure(go.Bar(
-                    x=categories_gastos,
-                    y=values_gastos,
-                    marker_color=colors_gastos,
-                    text=[f"${v:,.0f}" for v in values_gastos],
-                    textposition='outside',
-                    textfont=dict(size=11, color='#1F2937')
-                ))
-                
-                fig_gastos.update_layout(
-                    height=350,
-                    paper_bgcolor='white',
-                    plot_bgcolor='white',
-                    xaxis=dict(
-                        showgrid=False,
-                        title="Categoría de Gasto",
-                        tickfont=dict(size=12)
-                    ),
-                    yaxis=dict(
-                        showgrid=True, 
-                        gridcolor='#F3F4F6',
-            title="Monto (USD)",
-                        tickformat='$,.0f'
-                    ),
-                    margin=dict(l=80, r=50, t=20, b=80)
-                )
-                
-                img_path = save_chart_as_image(fig_gastos, 'expense_structure.png', width=700, height=350)
-                if img_path:
-                    chart_images.append(img_path)
-                    story.append(Image(img_path, width=5.5*inch, height=2.8*inch))
-                    story.append(Spacer(1, 20))
-            
-            # 3. PATRIMONY DISTRIBUTION PIE
-            story.append(Paragraph("Gráfica: Distribución del Patrimonio", subtitle_style))
-            
-            categories = ['Empresas', 'Inv. Productivas', 'Inv. No Productivas', 'Inv. Financieras']
-            values = [
-                safe_float(kpis.get('total_companies', 0)),
-                safe_float(kpis.get('total_productive', 0)),
-                safe_float(kpis.get('total_non_productive', 0)),
-                safe_float(kpis.get('total_financial', 0))
-            ]
-            
-            fig_patrimony = px.pie(
-                values=values,
-                names=categories,
-                color_discrete_sequence=['#1E3A8A', '#10B981', '#F59E0B', '#8B5CF6'],
-                hole=0.0
-            )
-            
-            fig_patrimony.update_layout(
-                height=350,
-                paper_bgcolor='white',
-                margin=dict(l=20, r=20, t=20, b=20),
-                showlegend=True,
-                legend=dict(x=0.7, y=0.5)
-            )
-            
-            fig_patrimony.update_traces(textposition='inside', textinfo='percent+label', textfont_size=10)
-            
-            img_path = save_chart_as_image(fig_patrimony, 'patrimony.png', width=700, height=350)
-            if img_path:
-                chart_images.append(img_path)
-                story.append(Image(img_path, width=5.5*inch, height=2.8*inch))
-                story.append(Spacer(1, 20))
-            
-            # 3. MAINTENANCE COSTS
-            if 'inversiones_no_productivas' in processed_data:
-                story.append(Paragraph("Gráfica 3: Costos de Mantenimiento Mensual", subtitle_style))
-                
-                df_no_prod = processed_data['inversiones_no_productivas']
-                name_col = find_exact_column(df_no_prod, ['Nombre del Activo'])
-                costo_mant_col = find_exact_column(df_no_prod, ['Costo mantenimiento'])
-                if name_col and costo_mant_col:
-                    df_valid = df_no_prod.copy()
-                    df_valid[costo_mant_col] = pd.to_numeric(df_valid[costo_mant_col], errors='coerce').fillna(0)
-                    
-                    nombres = []
-                    costos = []
-                    
-                    for _, row in df_valid.iterrows():
-                        costo_anual = safe_float(row[costo_mant_col])
-                        costo_mensual = costo_anual / 12
-                        
-                        if costo_mensual > 0:
-                            nombres.append(str(row[name_col]))
-                            costos.append(costo_mensual)
-
-                                    
-                    if costos:
-                        fig_maint = go.Figure(go.Bar(
-                            x=nombres,
-                            y=costos,
-                            marker_color='#3B82F6',
-                            text=[f"${c:,.0f}" for c in costos],
-                            textposition='outside'
-                        ))
-                        
-                        fig_maint.update_layout(
-                            height=350,
-                            paper_bgcolor='white',
-                            plot_bgcolor='white',
-                            xaxis=dict(tickangle=45),
-                            yaxis=dict(showgrid=True, gridcolor='#F3F4F6'),
-                            margin=dict(l=50, r=50, t=20, b=120)
-                        )
-                        
-                        img_path = save_chart_as_image(fig_maint, 'maintenance.png', width=700, height=350)
-                        if img_path:
-                            chart_images.append(img_path)
-                            story.append(Image(img_path, width=5.5*inch, height=2.8*inch))
-                            story.append(Spacer(1, 20))
-            
-            # 4. FINANCIAL INVESTMENTS BY ASSET CLASS
-            if 'inversiones_financieras' in processed_data:
-                story.append(Paragraph("Inversiones Financieras por Asset Class", subtitle_style))
-                
-                df_fin = processed_data['inversiones_financieras']
-                asset_class_col = find_exact_column(df_fin, ['Asset class'])
-                valor_col = find_exact_column(df_fin, VALUE_COLUMN_PRIORITY['default'])
-                
-                if asset_class_col and valor_col:
-                    df_clean = df_fin.copy()
-                    df_clean[valor_col] = pd.to_numeric(df_clean[valor_col], errors='coerce').fillna(0)
-                    grouped = df_clean.groupby(asset_class_col)[valor_col].sum().reset_index()
-                    
-                    fig_fin = px.pie(
-                        values=grouped[valor_col],
-                        names=grouped[asset_class_col],
-                        color_discrete_sequence=['#1E3A8A', '#10B981', '#F59E0B'],
-                        hole=0.0
-                    )
-                    
-                    fig_fin.update_layout(
-                        height=300,
-                        paper_bgcolor='white',
-                        margin=dict(l=20, r=20, t=20, b=20),
-                        showlegend=True
-                    )
-                    
-                    fig_fin.update_traces(textposition='inside', textinfo='percent+label')
-                    
-                    img_path = save_chart_as_image(fig_fin, 'financial_assets.png', width=700, height=300)
-                    if img_path:
-                        chart_images.append(img_path)
-                        story.append(Image(img_path, width=5.5*inch, height=2.4*inch))
-                        story.append(Spacer(1, 20))
-            
-            # 5. EXPECTED RETURNS
-            story.append(Paragraph("Gráfica 10: Rendimiento Esperado por Tipo de Activo", subtitle_style))
-            
-            categories_ret = [
-                'Empresas',
-                'Inv. No Productivas',
-                'Inv. Productivas',
-                'Inv. Financieras'
-            ]
-            returns = [3, 2, 8, 7]
-            
-            fig_returns = go.Figure(go.Bar(
-                x=categories_ret,
-                y=returns,
-                marker_color=['#1E3A8A', '#1E3A8A', '#9CA3AF', '#9CA3AF'],
-                text=[f"{r}%" for r in returns],
-                textposition='outside'
-            ))
-            
-            fig_returns.update_layout(
-                height=350,
-                paper_bgcolor='white',
-                plot_bgcolor='white',
-                xaxis=dict(tickangle=45),
-                yaxis=dict(ticksuffix='%', range=[0, 10]),
-                margin=dict(l=50, r=50, t=20, b=100)
-            )
-            
-            img_path = save_chart_as_image(fig_returns, 'returns.png', width=700, height=350)
-            if img_path:
-                chart_images.append(img_path)
-                story.append(Image(img_path, width=5.5*inch, height=2.8*inch))
-                story.append(Spacer(1, 20))
-                
-        except Exception as e:
-            st.warning(f"Could not generate some chart images: {str(e)}")
         
         # Footer
         story.append(Spacer(1, 30))
@@ -3358,15 +2893,6 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
             
     
     # CASH FLOW ANALYSIS
-    st.markdown("""
-    <div class="section-container">
-        <h2 style="color: #1E3A8A; margin-bottom: 2rem;">Análisis de Flujo de Efectivo Requerido</h2>
-        <p style="color: #6B7280; font-size: 0.875rem;">
-            Metodología Proaltus de Priorización de Gastos
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-    
     flow_analysis = generate_cash_flow_analysis(st.session_state.processed_data)
     
     if flow_analysis:
@@ -3387,17 +2913,6 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
         # EXPENSES MEKKO CHART - Gráfica 2 from Manual  
         st.markdown("### Estructura de Gastos")
         create_expenses_mekko_chart(st.session_state.processed_data)
-        
-        st.markdown("---")
-        
-        # MAINTENANCE AND TAXES CHARTS - Gráficas 3 y 4 from Manual
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            create_maintenance_costs_graphic(st.session_state.processed_data)
-        
-        with col2:
-            create_taxes_graphic(st.session_state.processed_data)
         
         st.markdown("---")
         
@@ -3575,12 +3090,6 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
 
         st.markdown("---")
         
-        # EXPECTED RETURNS CHART - Gráfica 10 from Manual
-        st.markdown("### Rendimiento Esperado")
-        create_return_graphic()
-
-        st.markdown("---")
-        
         # GEOGRAPHIC DISTRIBUTION MAP
         st.markdown("""
         <div style="background: #1E3A8A; color: white; padding: 1rem; text-align: center; border-radius: 8px; margin: 2rem 0 1rem 0;">
@@ -3674,7 +3183,26 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
     </div>
     """, unsafe_allow_html=True)
     
-    col1, col2, col3, col4 = st.columns(4)
+    # Main action buttons in a centered, attractive layout
+    col1, col2, col3 = st.columns([1, 1.2, 1])
+    
+    with col2:
+        st.markdown("""
+        <div style="
+            background: linear-gradient(135deg, #1E3A8A 0%, #3B82F6 100%);
+            padding: 2rem;
+            border-radius: 16px;
+            box-shadow: 0 4px 20px rgba(30, 58, 138, 0.3);
+            margin-bottom: 1.5rem;
+        ">
+            <h3 style="color: white; text-align: center; margin-bottom: 1.5rem; font-size: 1.3rem; font-weight: 600;">
+                📊 Acciones Principales
+            </h3>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Three columns for main buttons
+    col1, col2, col3 = st.columns(3)
     
     with col1:
         if flow_analysis:
@@ -3698,38 +3226,56 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
                 ]
             }).to_csv(index=False)
             
+            st.markdown("""
+            <div style="text-align: center; margin-bottom: 0.5rem;">
+                <p style="color: #4B5563; font-size: 0.9rem; font-weight: 500;">Exportar Datos CSV</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
             st.download_button(
-                label="Exportar Análisis FCN",
+                label="📥 Exportar Análisis FCN",
                 data=csv_data,
                 file_name=f"analisis_flujo_efectivo_proaltus_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv"
+                mime="text/csv",
+                use_container_width=True,
+                type="secondary"
             )
     
     with col2:
-        if st.button("Generar Diagnóstico Completo", key="full_report"):
-            st.info("Generando diagnóstico patrimonial completo según metodología Proaltus...")
-    
-    with col3:
-        if st.button("Descargar Radiografía PDF", key="pdf_download"):
+        st.markdown("""
+        <div style="text-align: center; margin-bottom: 0.5rem;">
+            <p style="color: #4B5563; font-size: 0.9rem; font-weight: 500;">Documento Completo</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        if st.button("📄 Descargar Radiografía PDF", key="pdf_download", use_container_width=True, type="primary"):
             if PDF_AVAILABLE:
                 with st.spinner("Generando radiografía financiera en PDF..."):
                     pdf_data = generate_pdf_report(flow_analysis, kpis, st.session_state.processed_data)
                     if pdf_data:
                         st.download_button(
-                            label="Descargar Radiografía PDF",
+                            label="📥 Descargar PDF Generado",
                             data=pdf_data,
                             file_name=f"radiografia_financiera_proaltus_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
                             mime="application/pdf",
-                            key="pdf_download_button"
+                            key="pdf_download_button",
+                            use_container_width=True,
+                            type="primary"
                         )
-                        st.success("Radiografía PDF generada exitosamente!")
+                        st.success("✅ Radiografía PDF generada exitosamente!")
                     else:
-                        st.error("Error al generar la radiografía PDF")
+                        st.error("❌ Error al generar la radiografía PDF")
             else:
-                st.error("Funcionalidad PDF no disponible. Se requiere instalar reportlab.")
+                st.error("❌ Funcionalidad PDF no disponible. Se requiere instalar reportlab.")
     
-    with col4:
-        if st.button("Reiniciar Sistema", key="reset_system"):
+    with col3:
+        st.markdown("""
+        <div style="text-align: center; margin-bottom: 0.5rem;">
+            <p style="color: #4B5563; font-size: 0.9rem; font-weight: 500;">Gestión del Sistema</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        if st.button("🔄 Reiniciar Sistema", key="reset_system", use_container_width=True, type="secondary"):
             authenticated = st.session_state.get('authenticated', False)
             for key in list(st.session_state.keys()):
                 if key != 'authenticated' and key != 'page_config_set':
