@@ -3441,7 +3441,6 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
     x_max = max(10, max_return * 1.3)
     
     fig.update_layout(
-        title="",
         height=250,
         paper_bgcolor='white',
         plot_bgcolor='white',
@@ -3449,21 +3448,19 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
             showgrid=True,
             gridcolor='#E5E7EB',
             gridwidth=1,
-            title="Rendimiento Esperado %",
-            titlefont=dict(size=14, color='#1F2937', family="Inter"),
+            title=dict(text="Rendimiento Esperado %", font=dict(size=14, color='#1F2937', family="Inter")),
             tickfont=dict(size=12, color='#4B5563', family="Inter"),
             ticksuffix='%',
             range=[0, x_max]
         ),
         yaxis=dict(
             showgrid=False,
-            title="Tipo de Inversión",
-            titlefont=dict(size=14, color='#1F2937', family="Inter"),
+            title=dict(text="Tipo de Inversión", font=dict(size=14, color='#1F2937', family="Inter")),
             tickfont=dict(size=12, color='#4B5563', family="Inter")
         ),
         font=dict(family="Inter"),
         margin=dict(l=200, r=50, t=30, b=50),
-        bargap=0.4
+        barmode='group'
     )
     
     st.plotly_chart(fig, use_container_width=True)
