@@ -17,9 +17,11 @@ try:
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import inch
     from reportlab.lib import colors
+    from reportlab.lib.colors import HexColor
     PDF_AVAILABLE = True
 except ImportError:
     PDF_AVAILABLE = False
+    HexColor = None
 
 # Excel imports
 try:
@@ -794,6 +796,9 @@ def generate_cash_flow_analysis(data):
         ingresos_pasivos = 0  # Equation 8: Income from financial and productive investments
         
         # 1.1 Ingreso Salarial from Datos adicionales
+        # Buscar filas donde Categoría = "Ingresos" y Subcategoría = "Salario Profesional"
+        # 1.2 Ingresos Pasivos from Datos adicionales (Equation 8)
+        # Buscar filas donde Categoría = "Ingresos" y Subcategoría = "Pasivos" o "Pasivo"
         if 'datos_adicionales' in data:
             df_datos = data['datos_adicionales']
             
@@ -802,33 +807,40 @@ def generate_cash_flow_analysis(data):
             valor_col = find_exact_column(df_datos, VALUE_COLUMN_PRIORITY['datos_adicionales'])
             tipo_col = find_exact_column(df_datos, ['Tipo de Relación'])
             
-            if all([categoria_col, valor_col, tipo_col]):
-                # Filter only income
-                ingresos_data = df_datos[df_datos[tipo_col] == 'Ingreso']
+            if all([categoria_col, subcategoria_col, valor_col]):
+                # Preparar datos para filtrado (manejar NaN y convertir a string)
+                df_datos_clean = df_datos.copy()
+                df_datos_clean[categoria_col] = df_datos_clean[categoria_col].astype(str).str.strip().str.lower().fillna('')
+                df_datos_clean[subcategoria_col] = df_datos_clean[subcategoria_col].astype(str).str.strip().str.lower().fillna('')
                 
-                for _, row in ingresos_data.iterrows():
+                # 1.1 Ingreso Salarial: Categoría = "Ingresos" y Subcategoría = "Salario Profesional"
+                mask_salarial = (
+                    (df_datos_clean[categoria_col] == 'ingresos') &
+                    (df_datos_clean[subcategoria_col] == 'salario profesional')
+                )
+                
+                ingresos_salariales_data = df_datos[mask_salarial]
+                
+                # Sumar todos los valores de ingreso salarial
+                for _, row in ingresos_salariales_data.iterrows():
                     valor = safe_float(row[valor_col])
-                    # All income from "Datos adicionales" is considered salary income
-                    ingreso_salarial += valor
-        
-        # 1.2 Ingresos Pasivos from investments (Equation 8)
-        # From financial investments
-        if 'inversiones_financieras' in data:
-            df_fin = data['inversiones_financieras']
-            ingreso_col = find_exact_column(df_fin, ['Rendimiento Mensual'])
-            if ingreso_col:
-                for _, row in df_fin.iterrows():
-                    ingreso_value = safe_float(row[ingreso_col])
-                    ingresos_pasivos += ingreso_value
-
-        # From productive investments  
-        if 'inversiones_productivas' in data:
-            df_prod = data['inversiones_productivas']
-            ingreso_col = find_exact_column(df_prod, ['Rendimiento Mensual'])
-            if ingreso_col:
-                for _, row in df_prod.iterrows():
-                    ingreso_value = safe_float(row[ingreso_col])
-                    ingresos_pasivos += ingreso_value
+                    if valor > 0:
+                        ingreso_salarial += valor
+                
+                # 1.2 Ingresos Pasivos: Categoría = "Ingresos" y Subcategoría = "Pasivos" o "Pasivo"
+                mask_pasivos = (
+                    (df_datos_clean[categoria_col] == 'ingresos') &
+                    ((df_datos_clean[subcategoria_col] == 'pasivos') | 
+                     (df_datos_clean[subcategoria_col] == 'pasivo'))
+                )
+                
+                ingresos_pasivos_data = df_datos[mask_pasivos]
+                
+                # Sumar todos los valores de ingresos pasivos
+                for _, row in ingresos_pasivos_data.iterrows():
+                    valor = safe_float(row[valor_col])
+                    if valor > 0:
+                        ingresos_pasivos += valor
         
         # Total Income (Equation 3)
         total_ingresos = ingreso_salarial + ingresos_pasivos
@@ -840,12 +852,12 @@ def generate_cash_flow_analysis(data):
         gvarios = 0
         pension_voluntaria = 0
         proyecto_inmobiliarios = 0
-        provision_impuestos = 0
         
         # Diccionarios para guardar subcategorías individuales
         subcategorias_esenciales = {}
         subcategorias_operativos = {}
-        subcategorias_varios = {}  # Incluye viajes y lujo dentro de varios
+        subcategorias_varios = {}
+        subcategorias_impuestos = {}
         
         # 2.1 Calculate expense categories from Datos adicionales
         if 'datos_adicionales' in data:
@@ -870,136 +882,75 @@ def generate_cash_flow_analysis(data):
                     subcategoria_lower = subcategoria.lower()
                     categoria_lower = categoria.lower()
                     
-                    # CLASIFICACIÓN: Primero por categoría del Excel, luego por subcategoría
+                    # CLASIFICACIÓN: Primero verificar excepciones (no son gastos)
                     clasificado = False
                     
-                    # 1. PENSIÓN VOLUNTARIA
+                    # 1. PENSIÓN VOLUNTARIA (por subcategoría)
                     pension_keywords = ['pensión voluntaria', 'pension voluntaria', 'aporte pensión', 'aporte pension']
                     if any(kw in subcategoria_lower for kw in pension_keywords):
                         pension_voluntaria += valor
                         clasificado = True
                     
-                    # 2. PROYECTO INMOBILIARIO
+                    # 2. PROYECTO INMOBILIARIO (por subcategoría)
                     if not clasificado:
                         inmobiliario_keywords = ['proyecto inmobiliario', 'inmobiliario nuevo', 'inversión inmobiliaria', 'inversion inmobiliaria']
                         if any(kw in subcategoria_lower for kw in inmobiliario_keywords):
                             proyecto_inmobiliarios += valor
                             clasificado = True
                     
-                    # 3. CLASIFICACIÓN POR CATEGORÍA DEL EXCEL
-                    # Primero verificar excepciones específicas
-                    personal_domestico_keywords = ['personal doméstico', 'personal domestico', 'personal de servicio', 'empleada', 'empleado doméstico']
-                    es_personal_domestico = any(kw in subcategoria_lower or kw in categoria_lower for kw in personal_domestico_keywords)
-                    
+                    # 3. INVERSIONES (por categoría)
                     if not clasificado:
-                        if 'esencial' in categoria_lower:
+                        if 'inversion' in categoria_lower or 'inversión' in categoria_lower:
+                            proyecto_inmobiliarios += valor
+                            clasificado = True
+                    
+                    # 4. IMPUESTOS (por categoría) - con subcategorías
+                    if not clasificado:
+                        if 'impuesto' in categoria_lower or 'impuestos' in categoria_lower:
+                            # Guardar subcategoría de impuesto
+                            if nombre_item in subcategorias_impuestos:
+                                subcategorias_impuestos[nombre_item] += valor
+                            else:
+                                subcategorias_impuestos[nombre_item] = valor
+                            clasificado = True
+                    
+                    # 5. CLASIFICACIÓN DE GASTOS POR CATEGORÍA (columna B)
+                    # Gastos Esenciales: Categoría = "Gastos Esenciales"
+                    if not clasificado:
+                        if 'gastos esenciales' in categoria_lower or 'gasto esencial' in categoria_lower:
                             gesenciales += valor
                             if nombre_item in subcategorias_esenciales:
                                 subcategorias_esenciales[nombre_item] += valor
                             else:
                                 subcategorias_esenciales[nombre_item] = valor
                             clasificado = True
-                        elif 'operativo' in categoria_lower:
-                            # Excluir "personal doméstico" de Gastos Operativos
-                            if es_personal_domestico:
-                                # Mover a Gastos Varios
-                                gvarios += valor
-                                if nombre_item in subcategorias_varios:
-                                    subcategorias_varios[nombre_item] += valor
-                                else:
-                                    subcategorias_varios[nombre_item] = valor
+                    
+                    # Gastos Operativos: Categoría = "Gastos Operativos"
+                    if not clasificado:
+                        if 'gastos operativos' in categoria_lower or 'gasto operativo' in categoria_lower:
+                            goperativos += valor
+                            if nombre_item in subcategorias_operativos:
+                                subcategorias_operativos[nombre_item] += valor
                             else:
-                                goperativos += valor
-                                if nombre_item in subcategorias_operativos:
-                                    subcategorias_operativos[nombre_item] += valor
-                                else:
-                                    subcategorias_operativos[nombre_item] = valor
-                            clasificado = True
-                        elif 'varios' in categoria_lower or 'vario' in categoria_lower:
-                            # Gastos Varios incluye todo lo que esté en esta categoría
-                            gvarios += valor
-                            if nombre_item in subcategorias_varios:
-                                subcategorias_varios[nombre_item] += valor
-                            else:
-                                subcategorias_varios[nombre_item] = valor
-                            clasificado = True
-                        elif 'inversion' in categoria_lower or 'inversión' in categoria_lower:
-                            proyecto_inmobiliarios += valor
-                            clasificado = True
-                        elif 'impuesto' in categoria_lower:
-                            provision_impuestos += valor
+                                subcategorias_operativos[nombre_item] = valor
                             clasificado = True
                     
-                    # 4. Si no se clasificó por categoría, clasificar por subcategoría
-                    # (Viajes, Lujo y Personal Doméstico van a Gastos Varios)
+                    # Gastos Varios: Categoría = "Gastos Varios"
                     if not clasificado:
-                        # PERSONAL DOMÉSTICO - va a Gastos Varios (no a Operativos)
-                        if es_personal_domestico:
+                        if 'gastos varios' in categoria_lower or 'gasto varios' in categoria_lower or 'gastos vario' in categoria_lower or 'gasto vario' in categoria_lower:
                             gvarios += valor
                             if nombre_item in subcategorias_varios:
                                 subcategorias_varios[nombre_item] += valor
                             else:
                                 subcategorias_varios[nombre_item] = valor
                             clasificado = True
-                        
-                        # VIAJES - va a Gastos Varios
-                        if not clasificado:
-                            viajes_keywords = ['vacacion', 'viaje', 'hotel', 'vuelo', 'pasaje', 'hospedaje', 'tour']
-                            if any(kw in subcategoria_lower for kw in viajes_keywords):
-                                gvarios += valor
-                                if nombre_item in subcategorias_varios:
-                                    subcategorias_varios[nombre_item] += valor
-                                else:
-                                    subcategorias_varios[nombre_item] = valor
-                                clasificado = True
-                        
-                        # LUJO - va a Gastos Varios
-                        if not clasificado:
-                            lujo_keywords = ['joyería', 'joyeria', 'reloj', 'arte', 'coleccion', 'vino', 'licor', 'premium']
-                            if any(kw in subcategoria_lower for kw in lujo_keywords):
-                                gvarios += valor
-                                if nombre_item in subcategorias_varios:
-                                    subcategorias_varios[nombre_item] += valor
-                                else:
-                                    subcategorias_varios[nombre_item] = valor
-                                clasificado = True
-                        
-                        # Si aún no está clasificado, va a Gastos Varios por defecto
-                        if not clasificado:
-                            gvarios += valor
-                            if nombre_item in subcategorias_varios:
-                                subcategorias_varios[nombre_item] += valor
-                            else:
-                                subcategorias_varios[nombre_item] = valor
-        
-        # 2.2 Calculate maintenance costs
-        cmantenimiento_mensual = 0
-        impuestos_inversiones_mensual = 0
-
-        if 'inversiones_no_productivas' in data:
-            df_no_prod = data['inversiones_no_productivas']
-            
-            costo_mant_col = find_exact_column(df_no_prod, [
-                'Costo mantenimiento',
-                'Costo mantenimiento ',
-                ' Costo mantenimiento'
-            ])
-            
-            if costo_mant_col:
-                for _, row in df_no_prod.iterrows():
-                    costo_anual = safe_float(row[costo_mant_col])
-                    costo_mensual = costo_anual / 12
-                    cmantenimiento_mensual += costo_mensual
-            
-            tax_col = find_exact_column(df_no_prod, ['Impuestos'])
-            if tax_col:
-                impuestos_anuales = safe_float(df_no_prod[tax_col].sum())
-                impuestos_inversiones_mensual = impuestos_anuales / 12
         
         # STEP 3: CALCULATE TOTALS
-        total_gastos = gesenciales + goperativos + gvarios + cmantenimiento_mensual
+        # Calcular total de impuestos sumando todas las subcategorías
+        total_impuestos = sum(subcategorias_impuestos.values()) if subcategorias_impuestos else 0
+        
+        total_gastos = gesenciales + goperativos + gvarios
         total_inversiones = pension_voluntaria + proyecto_inmobiliarios
-        total_impuestos = impuestos_inversiones_mensual + provision_impuestos
         total_egresos = total_gastos + total_inversiones + total_impuestos
         resultado_neto = total_ingresos - total_egresos
         
@@ -1014,12 +965,11 @@ def generate_cash_flow_analysis(data):
                 'gastos_esenciales': gesenciales,
                 'gastos_operativos': goperativos,
                 'gastos_varios': gvarios,
-                'mantenimiento_inversiones': cmantenimiento_mensual,
                 'total': total_gastos,
                 'subcategorias': {
                     'esenciales': subcategorias_esenciales,
                     'operativos': subcategorias_operativos,
-                    'varios': subcategorias_varios  # Incluye viajes y lujo
+                    'varios': subcategorias_varios
                 }
             },
             'inversiones': {
@@ -1028,9 +978,8 @@ def generate_cash_flow_analysis(data):
                 'total': total_inversiones
             },
             'impuestos': {
-                'impuestos_inversiones': impuestos_inversiones_mensual,
-                'provision_impuestos': provision_impuestos,
-                'total': total_impuestos
+                'total': total_impuestos,
+                'subcategorias': subcategorias_impuestos
             },
             'resumen': {
                 'total_egresos': total_egresos,
@@ -2085,9 +2034,6 @@ def display_cash_flow_table(flow_analysis):
                 data.append(['    Gastos Varios', f"${safe_float(gastos.get('gastos_varios', 0)):,.0f}", ''])
                 row_styles.append('normal')
 
-        data.append(['  Mantenimiento Inversiones', f"${safe_float(gastos.get('mantenimiento_inversiones', 0)):,.0f}", ''])
-        row_styles.append('normal')
-
         # Investments (INV)
         data.append(['Inversiones (INV)', f"${safe_float(inversiones.get('total', 0)):,.0f}", f"{safe_float(porcentajes.get('inversiones', 0)):.0f}%"])
         row_styles.append('highlight')
@@ -2102,11 +2048,17 @@ def display_cash_flow_table(flow_analysis):
         data.append(['Impuestos (IMP)', f"${safe_float(impuestos.get('total', 0)):,.0f}", f"{safe_float(porcentajes.get('impuestos', 0)):.0f}%"])
         row_styles.append('highlight')
 
-        data.append(['  Impuestos Inversiones (anual/12)', f"${safe_float(impuestos.get('impuestos_inversiones', 0)):,.0f}", ''])
-        row_styles.append('normal')
-
-        data.append(['  Provisión Tributaria (renta, patrimonio)', f"${safe_float(impuestos.get('provision_impuestos', 0)):,.0f}", ''])
-        row_styles.append('normal')
+        # Impuestos con subcategorías
+        impuestos_sub = impuestos.get('subcategorias', {})
+        if impuestos_sub:
+            for nombre, valor in sorted(impuestos_sub.items(), key=lambda x: x[1], reverse=True):
+                data.append([f'    {nombre}', f"${valor:,.0f}", ''])
+                row_styles.append('normal')
+        else:
+            # Si no hay subcategorías, mostrar un item genérico
+            if safe_float(impuestos.get('total', 0)) > 0:
+                data.append(['    Impuestos', f"${safe_float(impuestos.get('total', 0)):,.0f}", ''])
+                row_styles.append('normal')
 
         # Totals
         data.append(['TOTAL EGRESOS (GASTOS+INV+IMP)', f"${safe_float(resumen.get('total_egresos', 0)):,.0f}", ''])
@@ -2529,13 +2481,16 @@ def generate_pdf_report(flow_analysis, kpis, processed_data):
         story = []
         chart_images = []
         
-        # Custom styles
+        # Custom styles - Importar colors directamente para evitar conflictos
+        from reportlab.lib import colors as rl_colors
+        from reportlab.lib.colors import HexColor
+        
         title_style = ParagraphStyle(
             'CustomTitle',
             parent=styles['Heading1'],
             fontSize=20,
             spaceAfter=20,
-            textColor=colors.HexColor('#1E3A8A'),
+            textColor=HexColor('#1E3A8A'),
             alignment=1,
             fontName='Helvetica-Bold'
         )
@@ -2545,7 +2500,7 @@ def generate_pdf_report(flow_analysis, kpis, processed_data):
             parent=styles['Heading2'],
             fontSize=14,
             spaceAfter=15,
-            textColor=colors.HexColor('#1E3A8A'),
+            textColor=HexColor('#1E3A8A'),
             fontName='Helvetica-Bold'
         )
         
@@ -2568,16 +2523,16 @@ def generate_pdf_report(flow_analysis, kpis, processed_data):
         
         kpi_table = Table(kpi_data, colWidths=[3*inch, 2*inch])
         kpi_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E3A8A')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('BACKGROUND', (0, 0), (-1, 0), HexColor('#1E3A8A')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), rl_colors.white),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, 0), 12),
             ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.white),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('BACKGROUND', (0, 1), (-1, -1), rl_colors.white),
+            ('GRID', (0, 0), (-1, -1), 0.5, rl_colors.grey),
             ('FONTSIZE', (0, 1), (-1, -1), 10),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F3F4F6')])
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [rl_colors.white, HexColor('#F3F4F6')])
         ]))
         
         story.append(kpi_table)
@@ -2596,79 +2551,116 @@ def generate_pdf_report(flow_analysis, kpis, processed_data):
             resumen = flow_analysis['resumen']
             porcentajes = resumen['porcentajes']
             
+            # Construir flow_data sin filas vacías
             flow_data = [
                 ['FLUJO REQUERIDO (Mensual)', 'VALOR $', '%'],
                 ['Ingreso', f"${ingresos['total']:,.0f}", '100%'],
                 ['  Ingreso Salarial', f"${ingresos['ingreso_salarial']:,.0f}", ''],
                 ['  Ingresos Pasivos', f"${ingresos['ingresos_pasivos']:,.0f}", ''],
-                ['', '', ''],
                 ['Gastos', f"${gastos['total']:,.0f}", f"{porcentajes['gastos']:.0f}%"],
                 ['  Gastos Esenciales', f"${gastos['gastos_esenciales']:,.0f}", ''],
                 ['  Gastos Operativos', f"${gastos['gastos_operativos']:,.0f}", ''],
                 ['  Gastos Varios', f"${gastos['gastos_varios']:,.0f}", ''],
-                ['  Mantenimiento Inversiones', f"${gastos['mantenimiento_inversiones']:,.0f}", ''],
-                ['', '', ''],
                 ['Inversiones (INV)', f"${inversiones['total']:,.0f}", f"{porcentajes['inversiones']:.0f}%"],
                 ['  Aporte Pensión Voluntaria', f"${inversiones['pension_voluntaria']:,.0f}", ''],
                 ['  Proyecto Inmobiliarios', f"${inversiones['proyecto_inmobiliarios']:,.0f}", ''],
-                ['', '', ''],
-                ['Impuestos (IMP)', f"${impuestos['total']:,.0f}", f"{porcentajes['impuestos']:.0f}%"],
-                ['  Impuestos Inversiones', f"${impuestos['impuestos_inversiones']:,.0f}", ''],
-                ['  Provisión Tributaria', f"${impuestos['provision_impuestos']:,.0f}", ''],
-                ['', '', ''],
-                ['TOTAL EGRESOS', f"${resumen['total_egresos']:,.0f}", ''],
-                ['Flujo Efectivo Neto (FCN)', f"${resumen['resultado_neto']:,.0f}", f"{porcentajes['resultado_neto']:.0f}%"]
+                ['Impuestos (IMP)', f"${impuestos['total']:,.0f}", f"{porcentajes['impuestos']:.0f}%"]
             ]
+            
+            # Agregar subcategorías de impuestos dinámicamente
+            impuestos_sub = impuestos.get('subcategorias', {})
+            if impuestos_sub:
+                for nombre, valor in sorted(impuestos_sub.items(), key=lambda x: x[1], reverse=True):
+                    flow_data.append([f'    {nombre}', f"${valor:,.0f}", ''])
+            else:
+                if impuestos['total'] > 0:
+                    flow_data.append(['    Impuestos', f"${impuestos['total']:,.0f}", ''])
+            
+            # Agregar TOTAL EGRESOS y FCN
+            flow_data.append(['TOTAL EGRESOS', f"${resumen['total_egresos']:,.0f}", ''])
+            flow_data.append(['Flujo Efectivo Neto (FCN)', f"${resumen['resultado_neto']:,.0f}", f"{porcentajes['resultado_neto']:.0f}%"])
             
             flow_table = Table(flow_data, colWidths=[3*inch, 1.5*inch, 0.75*inch])
             num_rows = len(flow_data)
             
+            # Calcular dinámicamente las posiciones de las filas principales
+            # Estructura fija:
+            # Fila 0: Header
+            # Fila 1: Ingreso
+            # Fila 2: Ingreso Salarial
+            # Fila 3: Ingresos Pasivos
+            # Fila 4: Gastos
+            # Fila 5: Gastos Esenciales
+            # Fila 6: Gastos Operativos
+            # Fila 7: Gastos Varios
+            # Fila 8: Inversiones (INV)
+            # Fila 9: Aporte Pensión Voluntaria
+            # Fila 10: Proyecto Inmobiliarios
+            # Fila 11: Impuestos (IMP)
+            # Luego: subcategorías de impuestos (dinámicas)
+            # Luego: TOTAL EGRESOS
+            # Luego: FCN
+            
+            row_ingreso = 1
+            row_gastos = 4
+            row_inversiones = 8
+            row_impuestos = 11
+            
+            # Calcular número de subcategorías de impuestos
+            num_subcategorias_impuestos = len(impuestos_sub) if impuestos_sub else (1 if impuestos['total'] > 0 else 0)
+            
+            # Calcular row_total_egresos y row_fcn dinámicamente
+            # TOTAL EGRESOS está después de Impuestos + sus subcategorías
+            row_total_egresos = row_impuestos + num_subcategorias_impuestos + 1
+            # FCN está después de TOTAL EGRESOS
+            row_fcn = row_total_egresos + 1
+            
             # Build style list dynamically based on actual number of rows
             table_style = [
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E3A8A')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('BACKGROUND', (0, 0), (-1, 0), HexColor('#1E3A8A')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), rl_colors.white),
                 ('ALIGN', (0, 0), (0, -1), 'LEFT'),
                 ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                 ('FONTSIZE', (0, 0), (-1, 0), 10),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('GRID', (0, 0), (-1, -1), 0.5, rl_colors.grey),
                 ('FONTSIZE', (0, 1), (-1, -1), 8),
             ]
             
             # Add row backgrounds only if we have enough rows
             if num_rows > 1:
-                table_style.append(('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F9FAFB')]))
+                table_style.append(('ROWBACKGROUNDS', (0, 1), (-1, -1), [rl_colors.white, HexColor('#F9FAFB')]))
             
-            # Add background colors only for rows that exist
-            # Row 1: Ingreso
-            if num_rows > 1:
-                table_style.append(('BACKGROUND', (0, 1), (-1, 1), colors.HexColor('#DBEAFE')))
-                table_style.append(('FONTNAME', (0, 1), (0, 1), 'Helvetica-Bold'))
+            # Aplicar highlights a las filas principales dinámicamente
+            # Row: Ingreso
+            if num_rows > row_ingreso:
+                table_style.append(('BACKGROUND', (0, row_ingreso), (-1, row_ingreso), HexColor('#DBEAFE')))
+                table_style.append(('FONTNAME', (0, row_ingreso), (0, row_ingreso), 'Helvetica-Bold'))
             
-            # Row 5: Gastos
-            if num_rows > 5:
-                table_style.append(('BACKGROUND', (0, 5), (-1, 5), colors.HexColor('#DBEAFE')))
-                table_style.append(('FONTNAME', (0, 5), (0, 5), 'Helvetica-Bold'))
+            # Row: Gastos
+            if num_rows > row_gastos:
+                table_style.append(('BACKGROUND', (0, row_gastos), (-1, row_gastos), HexColor('#DBEAFE')))
+                table_style.append(('FONTNAME', (0, row_gastos), (0, row_gastos), 'Helvetica-Bold'))
             
-            # Row 11: Inversiones
-            if num_rows > 11:
-                table_style.append(('BACKGROUND', (0, 11), (-1, 11), colors.HexColor('#DBEAFE')))
-                table_style.append(('FONTNAME', (0, 11), (0, 11), 'Helvetica-Bold'))
+            # Row: Inversiones
+            if num_rows > row_inversiones:
+                table_style.append(('BACKGROUND', (0, row_inversiones), (-1, row_inversiones), HexColor('#DBEAFE')))
+                table_style.append(('FONTNAME', (0, row_inversiones), (0, row_inversiones), 'Helvetica-Bold'))
             
-            # Row 15: Impuestos
-            if num_rows > 15:
-                table_style.append(('BACKGROUND', (0, 15), (-1, 15), colors.HexColor('#DBEAFE')))
-                table_style.append(('FONTNAME', (0, 15), (0, 15), 'Helvetica-Bold'))
+            # Row: Impuestos
+            if num_rows > row_impuestos:
+                table_style.append(('BACKGROUND', (0, row_impuestos), (-1, row_impuestos), HexColor('#DBEAFE')))
+                table_style.append(('FONTNAME', (0, row_impuestos), (0, row_impuestos), 'Helvetica-Bold'))
             
-            # Row 19: TOTAL EGRESOS
-            if num_rows > 19:
-                table_style.append(('BACKGROUND', (0, 19), (-1, 19), colors.HexColor('#DBEAFE')))
-                table_style.append(('FONTNAME', (0, 19), (0, 19), 'Helvetica-Bold'))
+            # Row: TOTAL EGRESOS
+            if num_rows > row_total_egresos:
+                table_style.append(('BACKGROUND', (0, row_total_egresos), (-1, row_total_egresos), HexColor('#DBEAFE')))
+                table_style.append(('FONTNAME', (0, row_total_egresos), (0, row_total_egresos), 'Helvetica-Bold'))
             
-            # Row 20: FCN
-            if num_rows > 20:
-                table_style.append(('BACKGROUND', (0, 20), (-1, 20), colors.HexColor('#DBEAFE')))
-                table_style.append(('FONTNAME', (0, 20), (0, 20), 'Helvetica-Bold'))
+            # Row: FCN
+            if num_rows > row_fcn:
+                table_style.append(('BACKGROUND', (0, row_fcn), (-1, row_fcn), HexColor('#DBEAFE')))
+                table_style.append(('FONTNAME', (0, row_fcn), (0, row_fcn), 'Helvetica-Bold'))
             
             flow_table.setStyle(TableStyle(table_style))
             
@@ -2679,7 +2671,7 @@ def generate_pdf_report(flow_analysis, kpis, processed_data):
         story.append(Spacer(1, 30))
         story.append(Paragraph(
             f"Generado por Proaltus Dashboard v4.0 - {datetime.now().strftime('%d/%m/%Y %H:%M')}",
-            ParagraphStyle('Footer', parent=styles['Normal'], fontSize=8, textColor=colors.grey, alignment=1)
+            ParagraphStyle('Footer', parent=styles['Normal'], fontSize=8, textColor=rl_colors.grey, alignment=1)
         ))
         
         doc.build(story)
@@ -3234,7 +3226,7 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
     """, unsafe_allow_html=True)
     
     if flow_analysis:
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3 = st.columns(3)
         
         with col1:
             # Independence indicator (Equation 18)
@@ -3251,19 +3243,6 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
             """, unsafe_allow_html=True)
         
         with col2:
-            # Maintenance burden (Equation 19)
-            maintenance_cost = flow_analysis['gastos']['mantenimiento_inversiones']
-            maintenance_burden = (maintenance_cost / total_income * 100) if total_income > 0 else 0
-            
-            st.markdown(f"""
-            <div class="kpi-card">
-                <div class="kpi-title">Carga de Mantenimiento (CM)</div>
-                <div class="kpi-value">{maintenance_burden:.1f}%</div>
-                <div class="kpi-meta">Costos Mant. / Ingresos</div>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col3:
             # Total expenses ratio
             gastos_rate = flow_analysis['resumen']['porcentajes']['gastos']
             
@@ -3275,7 +3254,7 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
             </div>
             """, unsafe_allow_html=True)
 
-        with col4:
+        with col3:
             # Investment ratio
             inv_rate = flow_analysis['resumen']['porcentajes']['inversiones']
             
