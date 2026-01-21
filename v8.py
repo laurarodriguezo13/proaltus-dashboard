@@ -2923,7 +2923,11 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
             # Buscar columnas necesarias
             nombre_col = find_exact_column(df_no_prod, ['Nombre del Activo'])
             moneda_col = find_exact_column(df_no_prod, ['Moneda', 'Moneda (Lista)', 'Moneda '])
-            valor_local_col = find_exact_column(df_no_prod, ['Valor (Moneda Local)', 'Valor Moneda Local'])
+            costo_mant_col = find_exact_column(df_no_prod, [
+                'Costo mantenimiento',
+                'Costo mantenimiento ',
+                ' Costo mantenimiento'
+            ])
             impuestos_col = find_exact_column(df_no_prod, ['Impuestos'])
             
             # Mostrar los dos dataframes lado a lado
@@ -2934,7 +2938,7 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
             with col1:
                 st.markdown("### Costo de Mantenimiento - Inversiones No Productivas")
                 
-                if nombre_col and moneda_col and valor_local_col:
+                if nombre_col and moneda_col and costo_mant_col:
                     # Crear DataFrame con los datos
                     df_mantenimiento = df_no_prod.copy()
                     
@@ -2946,15 +2950,15 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
                     ].copy()
                     
                     if not df_mantenimiento.empty:
-                        # Obtener valor en moneda local (columna F)
-                        df_mantenimiento['Valor en Moneda Local'] = pd.to_numeric(
-                            df_mantenimiento[valor_local_col], errors='coerce'
+                        # Obtener costo de mantenimiento (columna I)
+                        df_mantenimiento['Costo de Mantenimiento'] = pd.to_numeric(
+                            df_mantenimiento[costo_mant_col], errors='coerce'
                         )
                         
                         # Crear DataFrame final con las columnas solicitadas
                         df_mant_final = pd.DataFrame({
                             'Nombre del Activo': df_mantenimiento[nombre_col].astype(str).str.strip(),
-                            'Valor en Moneda Local': df_mantenimiento['Valor en Moneda Local'].fillna(0),
+                            'Valor en Moneda Local': df_mantenimiento['Costo de Mantenimiento'].fillna(0),
                             'Moneda': df_mantenimiento[moneda_col].astype(str).str.strip() if moneda_col else 'N/A'
                         })
                         
@@ -2975,7 +2979,7 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
                     missing = []
                     if not nombre_col: missing.append("Nombre del Activo")
                     if not moneda_col: missing.append("Moneda")
-                    if not valor_local_col: missing.append("Valor (Moneda Local)")
+                    if not costo_mant_col: missing.append("Costo mantenimiento")
                     st.warning(f"Faltan columnas: {', '.join(missing)}")
             
             # DataFrame 2: Impuestos - Inversiones No Productivas
