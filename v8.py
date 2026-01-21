@@ -787,18 +787,13 @@ def create_patrimony_mekko_chart(kpis):
 
 # CASH FLOW ANALYSIS - CORRECTED ACCORDING TO MANUAL FORMULAS
 def generate_cash_flow_analysis(data):
-    """Generate comprehensive cash flow analysis following exact manual formulas - CORREGIDO"""
+    """Generate comprehensive cash flow analysis - COMPLETAMENTE DINÁMICO"""
     try:
         flow_analysis = {}
         
-        # STEP 1: CALCULATE INGRESOS FOLLOWING EQUATIONS 7-8
-        ingreso_salarial = 0  # Equation 7: Sum of salaries and wages
-        ingresos_pasivos = 0  # Equation 8: Income from financial and productive investments
+        # Estructura dinámica: categoría -> subcategorías -> valores
+        categorias_datos = {}
         
-        # 1.1 Ingreso Salarial from Datos adicionales
-        # Buscar filas donde Categoría = "Ingresos" y Subcategoría = "Salario Profesional"
-        # 1.2 Ingresos Pasivos from Datos adicionales (Equation 8)
-        # Buscar filas donde Categoría = "Ingresos" y Subcategoría = "Pasivos" o "Pasivo"
         if 'datos_adicionales' in data:
             df_datos = data['datos_adicionales']
             
@@ -808,158 +803,80 @@ def generate_cash_flow_analysis(data):
             tipo_col = find_exact_column(df_datos, ['Tipo de Relación'])
             
             if all([categoria_col, subcategoria_col, valor_col]):
-                # Preparar datos para filtrado (manejar NaN y convertir a string)
-                df_datos_clean = df_datos.copy()
-                df_datos_clean[categoria_col] = df_datos_clean[categoria_col].astype(str).str.strip().str.lower().fillna('')
-                df_datos_clean[subcategoria_col] = df_datos_clean[subcategoria_col].astype(str).str.strip().str.lower().fillna('')
-                
-                # 1.1 Ingreso Salarial: Categoría = "Ingresos" y Subcategoría = "Salario Profesional"
-                mask_salarial = (
-                    (df_datos_clean[categoria_col] == 'ingresos') &
-                    (df_datos_clean[subcategoria_col] == 'salario profesional')
-                )
-                
-                ingresos_salariales_data = df_datos[mask_salarial]
-                
-                # Sumar todos los valores de ingreso salarial
-                for _, row in ingresos_salariales_data.iterrows():
-                    valor = safe_float(row[valor_col])
-                    if valor > 0:
-                        ingreso_salarial += valor
-                
-                # 1.2 Ingresos Pasivos: Categoría = "Ingresos" y Subcategoría = "Pasivos" o "Pasivo"
-                mask_pasivos = (
-                    (df_datos_clean[categoria_col] == 'ingresos') &
-                    ((df_datos_clean[subcategoria_col] == 'pasivos') | 
-                     (df_datos_clean[subcategoria_col] == 'pasivo'))
-                )
-                
-                ingresos_pasivos_data = df_datos[mask_pasivos]
-                
-                # Sumar todos los valores de ingresos pasivos
-                for _, row in ingresos_pasivos_data.iterrows():
-                    valor = safe_float(row[valor_col])
-                    if valor > 0:
-                        ingresos_pasivos += valor
-        
-        # Total Income (Equation 3)
-        total_ingresos = ingreso_salarial + ingresos_pasivos
-        
-        # STEP 2: CALCULATE EGRESOS FOLLOWING EQUATION 4
-        # Initialize expense categories
-        gesenciales = 0
-        goperativos = 0
-        gvarios = 0
-        pension_voluntaria = 0
-        proyecto_inmobiliarios = 0
-        
-        # Diccionarios para guardar subcategorías individuales
-        subcategorias_esenciales = {}
-        subcategorias_operativos = {}
-        subcategorias_varios = {}
-        subcategorias_impuestos = {}
-        
-        # 2.1 Calculate expense categories from Datos adicionales
-        if 'datos_adicionales' in data:
-            df_datos = data['datos_adicionales']
-            
-            if all([categoria_col, valor_col, tipo_col]):
-                egresos_data = df_datos[df_datos[tipo_col] == 'Egreso'].copy()
-                
-                # Procesar cada egreso
-                for _, row in egresos_data.iterrows():
+                # Procesar TODAS las filas dinámicamente
+                for _, row in df_datos.iterrows():
                     categoria = str(row[categoria_col]).strip()
+                    subcategoria = str(row[subcategoria_col]).strip() if pd.notna(row[subcategoria_col]) else ""
                     valor = safe_float(row[valor_col])
                     
-                    # Obtener subcategoría
-                    subcategoria = ""
-                    if subcategoria_col and pd.notna(row[subcategoria_col]):
-                        subcategoria = str(row[subcategoria_col]).strip()
+                    # Filtrar por tipo si existe la columna
+                    if tipo_col:
+                        tipo = str(row[tipo_col]).strip().lower() if pd.notna(row[tipo_col]) else ""
+                        # Para ingresos, filtrar por "Ingreso", para egresos filtrar por "Egreso"
+                        if categoria.lower() == 'ingresos' and tipo != 'ingreso':
+                            continue
+                        elif categoria.lower() != 'ingresos' and tipo != 'egreso':
+                            continue
                     
-                    # Usar subcategoría como nombre, o categoría si no hay subcategoría
-                    nombre_item = subcategoria if subcategoria else categoria
-                    
-                    subcategoria_lower = subcategoria.lower()
-                    categoria_lower = categoria.lower()
-                    
-                    # CLASIFICACIÓN: Primero verificar excepciones (no son gastos)
-                    clasificado = False
-                    
-                    # 1. PENSIÓN VOLUNTARIA (por subcategoría)
-                    pension_keywords = ['pensión voluntaria', 'pension voluntaria', 'aporte pensión', 'aporte pension']
-                    if any(kw in subcategoria_lower for kw in pension_keywords):
-                        pension_voluntaria += valor
-                        clasificado = True
-                    
-                    # 2. PROYECTO INMOBILIARIO (por subcategoría)
-                    if not clasificado:
-                        inmobiliario_keywords = ['proyecto inmobiliario', 'inmobiliario nuevo', 'inversión inmobiliaria', 'inversion inmobiliaria']
-                        if any(kw in subcategoria_lower for kw in inmobiliario_keywords):
-                            proyecto_inmobiliarios += valor
-                            clasificado = True
-                    
-                    # 3. INVERSIONES (por categoría)
-                    if not clasificado:
-                        if 'inversion' in categoria_lower or 'inversión' in categoria_lower:
-                            proyecto_inmobiliarios += valor
-                            clasificado = True
-                    
-                    # 4. IMPUESTOS (por categoría) - con subcategorías
-                    if not clasificado:
-                        if 'impuesto' in categoria_lower or 'impuestos' in categoria_lower:
-                            # Guardar subcategoría de impuesto
-                            if nombre_item in subcategorias_impuestos:
-                                subcategorias_impuestos[nombre_item] += valor
-                            else:
-                                subcategorias_impuestos[nombre_item] = valor
-                            clasificado = True
-                    
-                    # 5. CLASIFICACIÓN DE GASTOS POR CATEGORÍA (columna B)
-                    # Gastos Esenciales: Categoría = "Gastos Esenciales"
-                    if not clasificado:
-                        if 'gastos esenciales' in categoria_lower or 'gasto esencial' in categoria_lower:
-                            gesenciales += valor
-                            if nombre_item in subcategorias_esenciales:
-                                subcategorias_esenciales[nombre_item] += valor
-                            else:
-                                subcategorias_esenciales[nombre_item] = valor
-                            clasificado = True
-                    
-                    # Gastos Operativos: Categoría = "Gastos Operativos"
-                    if not clasificado:
-                        if 'gastos operativos' in categoria_lower or 'gasto operativo' in categoria_lower:
-                            goperativos += valor
-                            if nombre_item in subcategorias_operativos:
-                                subcategorias_operativos[nombre_item] += valor
-                            else:
-                                subcategorias_operativos[nombre_item] = valor
-                            clasificado = True
-                    
-                    # Gastos Varios: Categoría = "Gastos Varios"
-                    if not clasificado:
-                        if 'gastos varios' in categoria_lower or 'gasto varios' in categoria_lower or 'gastos vario' in categoria_lower or 'gasto vario' in categoria_lower:
-                            gvarios += valor
-                            if nombre_item in subcategorias_varios:
-                                subcategorias_varios[nombre_item] += valor
-                            else:
-                                subcategorias_varios[nombre_item] = valor
-                            clasificado = True
+                    if valor > 0 and categoria:
+                        # Normalizar nombre de categoría (mantener capitalización original para display)
+                        categoria_key = categoria.lower()
+                        
+                        if categoria_key not in categorias_datos:
+                            categorias_datos[categoria_key] = {}
+                        
+                        # Usar subcategoría o "General" si no hay subcategoría
+                        subcat_key = subcategoria if subcategoria else "General"
+                        
+                        if subcat_key not in categorias_datos[categoria_key]:
+                            categorias_datos[categoria_key][subcat_key] = 0
+                        
+                        categorias_datos[categoria_key][subcat_key] += valor
         
-        # STEP 3: CALCULATE TOTALS
-        # Calcular total de impuestos sumando todas las subcategorías
+        # Extraer datos por categoría principal de forma dinámica
+        subcategorias_ingresos = categorias_datos.get('ingresos', {})
+        subcategorias_esenciales = categorias_datos.get('gastos esenciales', {})
+        subcategorias_operativos = categorias_datos.get('gastos operativos', {})
+        subcategorias_varios = categorias_datos.get('gastos varios', {})
+        subcategorias_impuestos = categorias_datos.get('impuestos', {})
+        subcategorias_inversiones = categorias_datos.get('inversiones', {})
+        
+        # Calcular totales
+        total_ingresos = sum(subcategorias_ingresos.values()) if subcategorias_ingresos else 0
+        gesenciales = sum(subcategorias_esenciales.values()) if subcategorias_esenciales else 0
+        goperativos = sum(subcategorias_operativos.values()) if subcategorias_operativos else 0
+        gvarios = sum(subcategorias_varios.values()) if subcategorias_varios else 0
         total_impuestos = sum(subcategorias_impuestos.values()) if subcategorias_impuestos else 0
+        total_inversiones = sum(subcategorias_inversiones.values()) if subcategorias_inversiones else 0
         
         total_gastos = gesenciales + goperativos + gvarios
-        total_inversiones = pension_voluntaria + proyecto_inmobiliarios
         total_egresos = total_gastos + total_inversiones + total_impuestos
         resultado_neto = total_ingresos - total_egresos
+        
+        # Valores de compatibilidad
+        ingreso_salarial = subcategorias_ingresos.get('Salario Profesional', 0)
+        ingresos_pasivos = subcategorias_ingresos.get('Pasivos', 0) + subcategorias_ingresos.get('Pasivo', 0)
+        
+        # Calcular subtotales de inversiones si existen
+        pension_voluntaria = 0
+        proyecto_inmobiliarios = 0
+        if subcategorias_inversiones:
+            for subcat, valor in subcategorias_inversiones.items():
+                subcat_lower = subcat.lower()
+                if 'pensión' in subcat_lower or 'pension' in subcat_lower:
+                    pension_voluntaria += valor
+                elif 'inmobiliario' in subcat_lower or 'proyecto' in subcat_lower:
+                    proyecto_inmobiliarios += valor
+                else:
+                    proyecto_inmobiliarios += valor  # Por defecto
         
         # Build complete analysis structure
         flow_analysis = {
             'ingresos': {
                 'ingreso_salarial': ingreso_salarial,
                 'ingresos_pasivos': ingresos_pasivos,
-                'total': total_ingresos
+                'total': total_ingresos,
+                'subcategorias': subcategorias_ingresos
             },
             'gastos': {
                 'gastos_esenciales': gesenciales,
@@ -975,7 +892,8 @@ def generate_cash_flow_analysis(data):
             'inversiones': {
                 'pension_voluntaria': pension_voluntaria,
                 'proyecto_inmobiliarios': proyecto_inmobiliarios,
-                'total': total_inversiones
+                'total': total_inversiones,
+                'subcategorias': subcategorias_inversiones
             },
             'impuestos': {
                 'total': total_impuestos,
@@ -1977,11 +1895,20 @@ def display_cash_flow_table(flow_analysis):
         data.append(['Ingreso', f"${safe_float(ingresos.get('total', 0)):,.0f}", '100%'])
         row_styles.append('highlight')
 
-        data.append(['  Ingreso Salarial', f"${safe_float(ingresos.get('ingreso_salarial', 0)):,.0f}", ''])
-        row_styles.append('normal')
-
-        data.append(['  Ingresos Pasivos', f"${safe_float(ingresos.get('ingresos_pasivos', 0)):,.0f}", ''])
-        row_styles.append('normal')
+        # Mostrar todas las subcategorías de ingresos dinámicamente
+        ingresos_sub = ingresos.get('subcategorias', {})
+        if ingresos_sub:
+            for nombre, valor in sorted(ingresos_sub.items(), key=lambda x: x[1], reverse=True):
+                data.append([f'    {nombre}', f"${valor:,.0f}", ''])
+                row_styles.append('normal')
+        else:
+            # Fallback: mostrar Ingreso Salarial e Ingresos Pasivos si no hay subcategorías
+            if safe_float(ingresos.get('ingreso_salarial', 0)) > 0:
+                data.append(['  Ingreso Salarial', f"${safe_float(ingresos.get('ingreso_salarial', 0)):,.0f}", ''])
+                row_styles.append('normal')
+            if safe_float(ingresos.get('ingresos_pasivos', 0)) > 0:
+                data.append(['  Ingresos Pasivos', f"${safe_float(ingresos.get('ingresos_pasivos', 0)):,.0f}", ''])
+                row_styles.append('normal')
 
         # GASTOS (unificado)
         data.append(['Gastos', f"${safe_float(gastos.get('total', 0)):,.0f}", f"{safe_float(porcentajes.get('gastos', 0)):.0f}%"])
@@ -2034,15 +1961,23 @@ def display_cash_flow_table(flow_analysis):
                 data.append(['    Gastos Varios', f"${safe_float(gastos.get('gastos_varios', 0)):,.0f}", ''])
                 row_styles.append('normal')
 
-        # Investments (INV)
+        # Investments (INV) - con todas las subcategorías dinámicamente
         data.append(['Inversiones (INV)', f"${safe_float(inversiones.get('total', 0)):,.0f}", f"{safe_float(porcentajes.get('inversiones', 0)):.0f}%"])
         row_styles.append('highlight')
 
-        data.append(['  Aporte a Pensión Voluntaria', f"${safe_float(inversiones.get('pension_voluntaria', 0)):,.0f}", ''])
-        row_styles.append('normal')
-
-        data.append(['  Compromiso Proyecto Inmobiliarios', f"${safe_float(inversiones.get('proyecto_inmobiliarios', 0)):,.0f}", ''])
-        row_styles.append('normal')
+        inversiones_sub = inversiones.get('subcategorias', {})
+        if inversiones_sub:
+            for nombre, valor in sorted(inversiones_sub.items(), key=lambda x: x[1], reverse=True):
+                data.append([f'    {nombre}', f"${valor:,.0f}", ''])
+                row_styles.append('normal')
+        else:
+            # Fallback: mostrar items específicos si no hay subcategorías
+            if safe_float(inversiones.get('pension_voluntaria', 0)) > 0:
+                data.append(['  Aporte a Pensión Voluntaria', f"${safe_float(inversiones.get('pension_voluntaria', 0)):,.0f}", ''])
+                row_styles.append('normal')
+            if safe_float(inversiones.get('proyecto_inmobiliarios', 0)) > 0:
+                data.append(['  Compromiso Proyecto Inmobiliarios', f"${safe_float(inversiones.get('proyecto_inmobiliarios', 0)):,.0f}", ''])
+                row_styles.append('normal')
 
         # Taxes (IMP)
         data.append(['Impuestos (IMP)', f"${safe_float(impuestos.get('total', 0)):,.0f}", f"{safe_float(porcentajes.get('impuestos', 0)):.0f}%"])
@@ -2554,18 +2489,40 @@ def generate_pdf_report(flow_analysis, kpis, processed_data):
             # Construir flow_data sin filas vacías
             flow_data = [
                 ['FLUJO REQUERIDO (Mensual)', 'VALOR $', '%'],
-                ['Ingreso', f"${ingresos['total']:,.0f}", '100%'],
-                ['  Ingreso Salarial', f"${ingresos['ingreso_salarial']:,.0f}", ''],
-                ['  Ingresos Pasivos', f"${ingresos['ingresos_pasivos']:,.0f}", ''],
-                ['Gastos', f"${gastos['total']:,.0f}", f"{porcentajes['gastos']:.0f}%"],
-                ['  Gastos Esenciales', f"${gastos['gastos_esenciales']:,.0f}", ''],
-                ['  Gastos Operativos', f"${gastos['gastos_operativos']:,.0f}", ''],
-                ['  Gastos Varios', f"${gastos['gastos_varios']:,.0f}", ''],
-                ['Inversiones (INV)', f"${inversiones['total']:,.0f}", f"{porcentajes['inversiones']:.0f}%"],
-                ['  Aporte Pensión Voluntaria', f"${inversiones['pension_voluntaria']:,.0f}", ''],
-                ['  Proyecto Inmobiliarios', f"${inversiones['proyecto_inmobiliarios']:,.0f}", ''],
-                ['Impuestos (IMP)', f"${impuestos['total']:,.0f}", f"{porcentajes['impuestos']:.0f}%"]
+                ['Ingreso', f"${ingresos['total']:,.0f}", '100%']
             ]
+            
+            # Agregar todas las subcategorías de ingresos dinámicamente
+            ingresos_sub = ingresos.get('subcategorias', {})
+            if ingresos_sub:
+                for nombre, valor in sorted(ingresos_sub.items(), key=lambda x: x[1], reverse=True):
+                    flow_data.append([f'    {nombre}', f"${valor:,.0f}", ''])
+            else:
+                # Fallback: mostrar Ingreso Salarial e Ingresos Pasivos si no hay subcategorías
+                if ingresos.get('ingreso_salarial', 0) > 0:
+                    flow_data.append(['  Ingreso Salarial', f"${ingresos['ingreso_salarial']:,.0f}", ''])
+                if ingresos.get('ingresos_pasivos', 0) > 0:
+                    flow_data.append(['  Ingresos Pasivos', f"${ingresos['ingresos_pasivos']:,.0f}", ''])
+            
+            flow_data.append(['Gastos', f"${gastos['total']:,.0f}", f"{porcentajes['gastos']:.0f}%"])
+            # En PDF solo mostrar totales de gastos, NO subcategorías individuales
+            flow_data.append(['  Gastos Esenciales', f"${gastos['gastos_esenciales']:,.0f}", ''])
+            flow_data.append(['  Gastos Operativos', f"${gastos['gastos_operativos']:,.0f}", ''])
+            flow_data.append(['  Gastos Varios', f"${gastos['gastos_varios']:,.0f}", ''])
+            
+            flow_data.append(['Inversiones (INV)', f"${inversiones['total']:,.0f}", f"{porcentajes['inversiones']:.0f}%"])
+            # Mostrar todas las subcategorías de inversiones dinámicamente
+            inversiones_sub = inversiones.get('subcategorias', {})
+            if inversiones_sub:
+                for nombre, valor in sorted(inversiones_sub.items(), key=lambda x: x[1], reverse=True):
+                    flow_data.append([f'    {nombre}', f"${valor:,.0f}", ''])
+            else:
+                # Fallback si no hay subcategorías
+                if inversiones.get('pension_voluntaria', 0) > 0:
+                    flow_data.append(['  Aporte Pensión Voluntaria', f"${inversiones['pension_voluntaria']:,.0f}", ''])
+                if inversiones.get('proyecto_inmobiliarios', 0) > 0:
+                    flow_data.append(['  Proyecto Inmobiliarios', f"${inversiones['proyecto_inmobiliarios']:,.0f}", ''])
+            flow_data.append(['Impuestos (IMP)', f"${impuestos['total']:,.0f}", f"{porcentajes['impuestos']:.0f}%"])
             
             # Agregar subcategorías de impuestos dinámicamente
             impuestos_sub = impuestos.get('subcategorias', {})
@@ -2584,27 +2541,32 @@ def generate_pdf_report(flow_analysis, kpis, processed_data):
             num_rows = len(flow_data)
             
             # Calcular dinámicamente las posiciones de las filas principales
-            # Estructura fija:
             # Fila 0: Header
             # Fila 1: Ingreso
-            # Fila 2: Ingreso Salarial
-            # Fila 3: Ingresos Pasivos
-            # Fila 4: Gastos
-            # Fila 5: Gastos Esenciales
-            # Fila 6: Gastos Operativos
-            # Fila 7: Gastos Varios
-            # Fila 8: Inversiones (INV)
-            # Fila 9: Aporte Pensión Voluntaria
-            # Fila 10: Proyecto Inmobiliarios
-            # Fila 11: Impuestos (IMP)
+            # Filas dinámicas: subcategorías de ingresos (variable)
+            # Luego: Gastos
+            # Luego: subcategorías de gastos (fijas: 3 - Esenciales, Operativos, Varios)
+            # Luego: Inversiones (INV)
+            # Luego: subcategorías de inversiones (dinámicas)
+            # Luego: Impuestos (IMP)
             # Luego: subcategorías de impuestos (dinámicas)
             # Luego: TOTAL EGRESOS
             # Luego: FCN
             
             row_ingreso = 1
-            row_gastos = 4
-            row_inversiones = 8
-            row_impuestos = 11
+            num_subcategorias_ingresos = len(ingresos_sub) if ingresos_sub else (2 if (ingresos.get('ingreso_salarial', 0) > 0 or ingresos.get('ingresos_pasivos', 0) > 0) else 0)
+            
+            # Gastos está después de Ingreso + sus subcategorías
+            row_gastos = row_ingreso + num_subcategorias_ingresos + 1
+            
+            # Inversiones está después de Gastos + 3 subcategorías fijas (Esenciales, Operativos, Varios)
+            row_inversiones = row_gastos + 3 + 1
+            
+            # Calcular número de subcategorías de inversiones (ya se definió arriba)
+            num_subcategorias_inversiones = len(inversiones_sub) if inversiones_sub else (2 if (inversiones.get('pension_voluntaria', 0) > 0 or inversiones.get('proyecto_inmobiliarios', 0) > 0) else 0)
+            
+            # Impuestos está después de Inversiones + sus subcategorías
+            row_impuestos = row_inversiones + num_subcategorias_inversiones + 1
             
             # Calcular número de subcategorías de impuestos
             num_subcategorias_impuestos = len(impuestos_sub) if impuestos_sub else (1 if impuestos['total'] > 0 else 0)
