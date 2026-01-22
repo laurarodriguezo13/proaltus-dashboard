@@ -990,9 +990,21 @@ def calculate_patrimony_kpis(data):
 
 # CHART FUNCTIONS
 def create_cash_flow_graphic(flow_analysis):
-    """Create cash flow graphic following manual specifications - Gráfica 1"""
+    """Create cash flow graphic following manual specifications - Gráfica 1 - DINÁMICA"""
     ingresos = flow_analysis['ingresos']
     fig = go.Figure()
+    
+    # Obtener todas las subcategorías de ingresos dinámicamente
+    subcategorias_ingresos = ingresos.get('subcategorias', {})
+    
+    # Ordenar subcategorías por valor (descendente) para mejor visualización
+    subcategorias_ordenadas = sorted(subcategorias_ingresos.items(), key=lambda x: x[1], reverse=True) if subcategorias_ingresos else []
+    
+    # Paleta de colores que va de oscuro a claro para las subcategorías
+    colors_palette = ['#1E3A8A', '#3B82F6', '#60A5FA', '#93C5FD', '#DBEAFE', '#BFDBFE', '#A5B4FC', '#8B5CF6']
+    
+    # Construir lista de categorías para el eje Y (de abajo hacia arriba)
+    y_categories = []
     
     # Main bar (Dark Blue): Total Income - represents 100% of financial capacity
     fig.add_trace(go.Bar(
@@ -1007,42 +1019,76 @@ def create_cash_flow_graphic(flow_analysis):
         width=0.6,
         hovertemplate='<b>%{y}</b><br>Valor: $%{x:,.0f}<extra></extra>'
     ))
+    y_categories.append('Ingreso')
     
-    # Secondary bar (Blue): Salary Income - shows work dependency
-    fig.add_trace(go.Bar(
-        y=['Ingreso Salarial'],
-        x=[ingresos['ingreso_salarial']],
-        orientation='h',
-        marker_color='#3B82F6',  # Azul medio-oscuro más visible
-        text=[f"${ingresos['ingreso_salarial']:,.0f}"],
-        textposition='inside',
-        textfont=dict(color='white', size=14, family="Inter"),  # Texto blanco para mejor contraste
-        name='Ingreso Salarial',
-        width=0.4,
-        hovertemplate='<b>%{y}</b><br>Valor: $%{x:,.0f}<extra></extra>'
-    ))
+    # Agregar dinámicamente todas las subcategorías de ingresos
+    for idx, (subcat_nombre, subcat_valor) in enumerate(subcategorias_ordenadas):
+        if subcat_valor > 0:  # Solo mostrar subcategorías con valor > 0
+            # Asignar color de la paleta (ciclar si hay más subcategorías que colores)
+            color = colors_palette[idx % len(colors_palette)]
+            
+            fig.add_trace(go.Bar(
+                y=[subcat_nombre],
+                x=[subcat_valor],
+                orientation='h',
+                marker_color=color,
+                text=[f"${subcat_valor:,.0f}"],
+                textposition='inside',
+                textfont=dict(color='white', size=14, family="Inter"),
+                name=subcat_nombre,
+                width=0.4,
+                hovertemplate='<b>%{y}</b><br>Valor: $%{x:,.0f}<extra></extra>'
+            ))
+            y_categories.append(subcat_nombre)
     
-    # Tertiary bar (Medium Blue): Passive Income - indicates financial independence level
-    fig.add_trace(go.Bar(
-        y=['Ingresos Pasivos'],
-        x=[ingresos['ingresos_pasivos']],
-        orientation='h',
-        marker_color='#60A5FA',
-        text=[f"${ingresos['ingresos_pasivos']:,.0f}"],
-        textposition='inside',
-        textfont=dict(color='white', size=14, family="Inter"),
-        name='Ingresos Pasivos',
-        width=0.4,
-        hovertemplate='<b>%{y}</b><br>Valor: $%{x:,.0f}<extra></extra>'
-    ))
+    # Si no hay subcategorías, mantener las barras por defecto para compatibilidad
+    if not subcategorias_ordenadas:
+        if ingresos.get('ingreso_salarial', 0) > 0:
+            fig.add_trace(go.Bar(
+                y=['Ingreso Salarial'],
+                x=[ingresos['ingreso_salarial']],
+                orientation='h',
+                marker_color='#3B82F6',
+                text=[f"${ingresos['ingreso_salarial']:,.0f}"],
+                textposition='inside',
+                textfont=dict(color='white', size=14, family="Inter"),
+                name='Ingreso Salarial',
+                width=0.4,
+                hovertemplate='<b>%{y}</b><br>Valor: $%{x:,.0f}<extra></extra>'
+            ))
+            y_categories.append('Ingreso Salarial')
+        
+        if ingresos.get('ingresos_pasivos', 0) > 0:
+            fig.add_trace(go.Bar(
+                y=['Ingresos Pasivos'],
+                x=[ingresos['ingresos_pasivos']],
+                orientation='h',
+                marker_color='#60A5FA',
+                text=[f"${ingresos['ingresos_pasivos']:,.0f}"],
+                textposition='inside',
+                textfont=dict(color='white', size=14, family="Inter"),
+                name='Ingresos Pasivos',
+                width=0.4,
+                hovertemplate='<b>%{y}</b><br>Valor: $%{x:,.0f}<extra></extra>'
+            ))
+            y_categories.append('Ingresos Pasivos')
+    
+    # Invertir el orden para que el total esté arriba
+    y_categories.reverse()
+    
+    # Calcular altura dinámica basada en el número de barras
+    num_bars = len(y_categories)
+    base_height = 200
+    bar_height = 60
+    dynamic_height = base_height + (num_bars * bar_height)
     
     fig.update_layout(
         title="",
-        height=350,
+        height=dynamic_height,
         paper_bgcolor='white',
         plot_bgcolor='white',
         showlegend=False,
-        margin=dict(l=140, r=50, t=30, b=50),
+        margin=dict(l=180, r=50, t=30, b=50),
         xaxis=dict(
             showgrid=False, 
             showticklabels=False, 
@@ -1053,7 +1099,7 @@ def create_cash_flow_graphic(flow_analysis):
             showgrid=False, 
             tickfont=dict(size=14, color='#1F2937', family="Inter"),
             categoryorder='array',
-            categoryarray=['Ingresos Pasivos', 'Ingreso Salarial', 'Ingreso']
+            categoryarray=y_categories
         ),
         font=dict(family="Inter", color='#1F2937'),
         barmode='group'
