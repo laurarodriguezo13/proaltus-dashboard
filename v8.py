@@ -3035,6 +3035,10 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
         </div>
         """, unsafe_allow_html=True)
         
+        # MEKKO CHART - Primera fila, columna completa
+        create_patrimony_mekko_chart(kpis)
+        
+        # INVERSIONES PRODUCTIVAS Y NO PRODUCTIVAS - Segunda fila, dos columnas
         col1, col2 = st.columns(2)
         
         with col1:
@@ -3092,10 +3096,6 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
                         st.warning("No valid productive investment data")
                 else:
                     st.warning("Required columns not found for productive investments")
-            
-            create_financial_investments_chart(st.session_state.processed_data)
-            
-            create_financial_sub_asset_chart(st.session_state.processed_data)
         
         with col2:
             st.markdown("#### Valor Inversiones No Productivas") 
@@ -3152,8 +3152,15 @@ if st.session_state.data_initialized and st.session_state.analysis_results:
                         st.warning("No valid non-productive investment data")
                 else:
                     st.warning("Required columns not found for non-productive investments")
-            
-            create_patrimony_mekko_chart(kpis)
+        
+        # INVERSIONES FINANCIERAS - Tercera fila, dos columnas
+        col3, col4 = st.columns(2)
+        
+        with col3:
+            create_financial_investments_chart(st.session_state.processed_data)
+        
+        with col4:
+            create_financial_sub_asset_chart(st.session_state.processed_data)
         
         st.markdown("---")
         
