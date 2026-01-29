@@ -1138,13 +1138,9 @@ def create_financial_investments_chart(processed_data):
     grouped = df_clean.groupby(asset_class_col)[valor_col].sum().reset_index()
     grouped = grouped[grouped[valor_col] > 0]
     
-    colors_tipos = {
-        'Renta fija': '#1E3A8A',
-        'Renta variable': '#10B981', 
-        'Alternativos': '#F59E0B'
-    }
-    
-    colors = [colors_tipos.get(tipo.strip(), '#9CA3AF') for tipo in grouped[asset_class_col]]
+    # Paleta fija por posición: funciona con cualquier número de categorías y nombres (ES/EN)
+    palette_asset_class = ['#1E3A8A', '#10B981', '#F59E0B', '#3B82F6', '#8B5CF6', '#EC4899', '#06B6D4', '#84CC16']
+    colors = [palette_asset_class[i % len(palette_asset_class)] for i in range(len(grouped))]
     
     fig = px.pie(
         values=grouped[valor_col],
